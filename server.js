@@ -6,108 +6,125 @@ const bcrypt = require('bcryptjs');
 const nodemailer = require('nodemailer');
 const path = require('path');
 const fs = require('fs');
-const { DatabaseSync } = require('node:sqlite');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// DB path
-const DB_PATH = process.env.NODE_ENV === 'production'
-  ? (fs.existsSync('/data') ? '/data/noco-crm.db' : '/tmp/noco-crm.db')
-  : path.join(__dirname, 'noco-crm.db');
+// ── DB Pool ───────────────────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://qbot:wolfpack2026@localhost:5432/noco_crm',
+  ssl: false
+});
 
-const db = new DatabaseSync(DB_PATH);
+// ── Helper wrappers ───────────────────────────────────────────────────────────
+async function dbGet(sql, ...params) {
+  const { rows } = await pool.query(sql, params);
+  return rows[0] || null;
+}
+
+async function dbAll(sql, ...params) {
+  const { rows } = await pool.query(sql, params);
+  return rows;
+}
+
+async function dbRun(sql, ...params) {
+  return pool.query(sql, params);
+}
+
+// ── Convert ? placeholders to $1, $2, ... ────────────────────────────────────
+function toPostgres(sql) {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+}
+
+// Wrapped versions that auto-convert placeholders
+async function pgGet(sql, ...params) {
+  return dbGet(toPostgres(sql), ...params);
+}
+
+async function pgAll(sql, ...params) {
+  return dbAll(toPostgres(sql), ...params);
+}
+
+async function pgRun(sql, ...params) {
+  return pool.query(toPostgres(sql), params);
+}
 
 // ── Schema ────────────────────────────────────────────────────────────────────
-db.exec(`PRAGMA journal_mode = WAL;`);
-db.exec(`PRAGMA foreign_keys = ON;`);
+async function initSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS leads (
+      id SERIAL PRIMARY KEY,
+      business_name TEXT DEFAULT '',
+      segment TEXT DEFAULT '',
+      city TEXT DEFAULT '',
+      address TEXT DEFAULT '',
+      phone TEXT DEFAULT '',
+      website TEXT DEFAULT '',
+      yelp_url TEXT DEFAULT '',
+      yelp_rating REAL,
+      yelp_review_count INTEGER,
+      google_rating REAL,
+      google_review_count INTEGER,
+      years_in_business TEXT DEFAULT '',
+      owner_name TEXT DEFAULT '',
+      email TEXT DEFAULT '',
+      social_media TEXT DEFAULT '',
+      source TEXT DEFAULT '',
+      status TEXT DEFAULT 'untouched',
+      notes TEXT DEFAULT '',
+      email_sent INTEGER DEFAULT 0,
+      date_sent TEXT DEFAULT '',
+      last_contacted TEXT DEFAULT '',
+      next_followup TEXT DEFAULT '',
+      created_at TIMESTAMP DEFAULT NOW()
+    );
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS leads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    business_name TEXT DEFAULT '',
-    segment TEXT DEFAULT '',
-    city TEXT DEFAULT '',
-    address TEXT DEFAULT '',
-    phone TEXT DEFAULT '',
-    website TEXT DEFAULT '',
-    yelp_url TEXT DEFAULT '',
-    yelp_rating REAL,
-    yelp_review_count INTEGER,
-    google_rating REAL,
-    google_review_count INTEGER,
-    years_in_business TEXT DEFAULT '',
-    owner_name TEXT DEFAULT '',
-    email TEXT DEFAULT '',
-    social_media TEXT DEFAULT '',
-    source TEXT DEFAULT '',
-    status TEXT DEFAULT 'untouched',
-    notes TEXT DEFAULT '',
-    email_sent INTEGER DEFAULT 0,
-    date_sent TEXT DEFAULT '',
-    last_contacted TEXT DEFAULT '',
-    next_followup TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now'))
-  );
+    CREATE TABLE IF NOT EXISTS email_logs (
+      id SERIAL PRIMARY KEY,
+      lead_id INTEGER,
+      recipient TEXT,
+      subject TEXT,
+      status TEXT,
+      sent_at TIMESTAMP DEFAULT NOW(),
+      error TEXT
+    );
 
-  CREATE TABLE IF NOT EXISTS email_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lead_id INTEGER,
-    recipient TEXT,
-    subject TEXT,
-    status TEXT,
-    sent_at TEXT DEFAULT (datetime('now')),
-    error TEXT
-  );
+    CREATE TABLE IF NOT EXISTS email_template (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      subject TEXT,
+      body TEXT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    );
 
-  CREATE TABLE IF NOT EXISTS email_template (
-    id INTEGER PRIMARY KEY DEFAULT 1,
-    subject TEXT,
-    body TEXT,
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    password_hash TEXT
-  );
-`);
-
-// ── Helper: prepared statement wrappers ───────────────────────────────────────
-// node:sqlite uses positional ? params only (no named @param support for all versions)
-// We'll build queries dynamically
-
-function dbGet(sql, ...params) {
-  const stmt = db.prepare(sql);
-  return stmt.get(...params);
-}
-
-function dbAll(sql, ...params) {
-  const stmt = db.prepare(sql);
-  return stmt.all(...params);
-}
-
-function dbRun(sql, ...params) {
-  const stmt = db.prepare(sql);
-  return stmt.run(...params);
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT UNIQUE,
+      password_hash TEXT
+    );
+  `);
+  console.log('✓ Schema ready');
 }
 
 // ── Seed user ─────────────────────────────────────────────────────────────────
-const existingUser = dbGet('SELECT id FROM users WHERE username = ?', 'dj');
-if (!existingUser) {
-  const hash = bcrypt.hashSync('wolfpack2026', 10);
-  dbRun('INSERT INTO users (username, password_hash) VALUES (?, ?)', 'dj', hash);
-  console.log('✓ User dj created');
+async function seedUser() {
+  const existing = await pgGet('SELECT id FROM users WHERE username = ?', 'dj');
+  if (!existing) {
+    const hash = bcrypt.hashSync('wolfpack2026', 10);
+    await pgRun('INSERT INTO users (username, password_hash) VALUES (?, ?)', 'dj', hash);
+    console.log('✓ User dj created');
+  }
 }
 
 // ── Seed default email template ───────────────────────────────────────────────
-const existingTemplate = dbGet('SELECT id FROM email_template WHERE id = 1');
-if (!existingTemplate) {
-  dbRun(
-    `INSERT INTO email_template (id, subject, body) VALUES (1, ?, ?)`,
-    'How I cut lead response time to 60 seconds (and what it did to revenue)',
-    `Hi [First Name],
+async function seedTemplate() {
+  const existing = await pgGet('SELECT id FROM email_template WHERE id = 1');
+  if (!existing) {
+    await pgRun(
+      `INSERT INTO email_template (id, subject, body) VALUES (1, ?, ?)`,
+      'How I cut lead response time to 60 seconds (and what it did to revenue)',
+      `Hi [First Name],
 
 My name is DJ Bonifacic — I've spent 8+ years building AI systems, analytics, and automation infrastructure for growing companies. I'm based in Fort Collins, and I'm selectively helping a handful of NoCo businesses deploy their first AI tool — at no cost.
 
@@ -129,30 +146,39 @@ Worth a 15-minute call?
 — DJ Bonifacic
 Fort Collins, CO
 qbonifacic@icloud.com`
-  );
-  console.log('✓ Default email template created');
+    );
+    console.log('✓ Default email template created');
+  }
 }
 
 // ── CSV Import ────────────────────────────────────────────────────────────────
-const existingLeads = dbGet('SELECT COUNT(*) as cnt FROM leads');
-if (!existingLeads || existingLeads.cnt === 0) {
-  const csvPath = process.env.CSV_PATH || '/Users/qbot/.openclaw/workspace/research/noco_scraper/noco_businesses_top.csv';
-  if (fs.existsSync(csvPath)) {
-    const { parse } = require('csv-parse/sync');
-    const raw = fs.readFileSync(csvPath, 'utf8');
-    const records = parse(raw, { columns: true, skip_empty_lines: true, relax_quotes: true });
+async function seedLeads() {
+  const countRow = await pgGet('SELECT COUNT(*) as cnt FROM leads');
+  if (countRow && parseInt(countRow.cnt) > 0) {
+    console.log(`✓ Leads already seeded (${countRow.cnt} rows)`);
+    return;
+  }
 
-    const insertSQL = `INSERT INTO leads (business_name, segment, city, address, phone, website, yelp_url,
-      yelp_rating, yelp_review_count, google_rating, google_review_count,
-      years_in_business, owner_name, email, social_media, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const csvPath = process.env.CSV_PATH || path.join(__dirname, 'leads_data.csv');
+  if (!fs.existsSync(csvPath)) {
+    console.log('⚠ CSV not found at', csvPath);
+    return;
+  }
 
-    // Use transaction for speed
-    db.exec('BEGIN');
-    try {
-      const stmt = db.prepare(insertSQL);
-      for (const r of records) {
-        stmt.run(
+  const { parse } = require('csv-parse/sync');
+  const raw = fs.readFileSync(csvPath, 'utf8');
+  const records = parse(raw, { columns: true, skip_empty_lines: true, relax_quotes: true });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const r of records) {
+      await client.query(
+        `INSERT INTO leads (business_name, segment, city, address, phone, website, yelp_url,
+          yelp_rating, yelp_review_count, google_rating, google_review_count,
+          years_in_business, owner_name, email, social_media, source, status, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        [
           r.business_name || '',
           r.segment || '',
           r.city || '',
@@ -168,17 +194,19 @@ if (!existingLeads || existingLeads.cnt === 0) {
           r.owner_name || '',
           r.email || '',
           r.social_media || '',
-          r.source || ''
-        );
-      }
-      db.exec('COMMIT');
-      console.log(`✓ Imported ${records.length} leads from CSV`);
-    } catch (e) {
-      db.exec('ROLLBACK');
-      console.error('CSV import failed:', e.message);
+          r.source || '',
+          r.status || 'untouched',
+          r.notes || ''
+        ]
+      );
     }
-  } else {
-    console.log('⚠ CSV not found at', csvPath);
+    await client.query('COMMIT');
+    console.log(`✓ Imported ${records.length} leads from CSV`);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('CSV import failed:', e.message);
+  } finally {
+    client.release();
   }
 }
 
@@ -199,9 +227,9 @@ const requireAuth = (req, res, next) => {
 };
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
-  const user = dbGet('SELECT * FROM users WHERE username = ?', username);
+  const user = await pgGet('SELECT * FROM users WHERE username = ?', username);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -224,20 +252,20 @@ app.get('/api/me', (req, res) => {
 });
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
-app.get('/api/stats', requireAuth, (req, res) => {
+app.get('/api/stats', requireAuth, async (req, res) => {
   res.json({
-    total: dbGet('SELECT COUNT(*) as n FROM leads').n,
-    pursuing: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='pursue'").n,
-    hidden: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='hide'").n,
-    maybe: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='maybe'").n,
-    untouched: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='untouched'").n,
-    emails_sent: dbGet("SELECT COUNT(*) as n FROM leads WHERE email_sent=1").n,
-    has_email: dbGet("SELECT COUNT(*) as n FROM leads WHERE email != ''").n,
+    total: parseInt((await pgGet('SELECT COUNT(*) as n FROM leads')).n),
+    pursuing: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='pursue'")).n),
+    hidden: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='hide'")).n),
+    maybe: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='maybe'")).n),
+    untouched: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='untouched'")).n),
+    emails_sent: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE email_sent=1")).n),
+    has_email: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE email != ''")).n),
   });
 });
 
 // ── Leads ─────────────────────────────────────────────────────────────────────
-app.get('/api/leads', requireAuth, (req, res) => {
+app.get('/api/leads', requireAuth, async (req, res) => {
   const {
     page = 1, limit = 50, sort = 'id', dir = 'asc',
     city, segment, status, min_rating, has_email, has_phone, has_website,
@@ -250,25 +278,30 @@ app.get('/api/leads', requireAuth, (req, res) => {
 
   const conditions = [];
   const params = [];
+  let paramIdx = 1;
 
-  if (city) { conditions.push('city = ?'); params.push(city); }
-  if (segment) { conditions.push('segment = ?'); params.push(segment); }
-  if (status) { conditions.push('status = ?'); params.push(status); }
-  if (min_rating) { conditions.push('google_rating >= ?'); params.push(parseFloat(min_rating)); }
+  if (city) { conditions.push(`city = $${paramIdx++}`); params.push(city); }
+  if (segment) { conditions.push(`segment = $${paramIdx++}`); params.push(segment); }
+  if (status) { conditions.push(`status = $${paramIdx++}`); params.push(status); }
+  if (min_rating) { conditions.push(`google_rating >= $${paramIdx++}`); params.push(parseFloat(min_rating)); }
   if (has_email === 'yes') conditions.push("email != ''");
   if (has_email === 'no') conditions.push("(email IS NULL OR email = '')");
   if (has_phone === 'yes') conditions.push("phone != ''");
   if (has_phone === 'no') conditions.push("(phone IS NULL OR phone = '')");
   if (has_website === 'yes') conditions.push("website != ''");
   if (has_website === 'no') conditions.push("(website IS NULL OR website = '')");
-  if (search) { conditions.push("(business_name LIKE ? OR city LIKE ? OR address LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  if (search) {
+    conditions.push(`(business_name ILIKE $${paramIdx} OR city ILIKE $${paramIdx+1} OR address ILIKE $${paramIdx+2})`);
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    paramIdx += 3;
+  }
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-  const countRow = dbGet(`SELECT COUNT(*) as n FROM leads ${where}`, ...params);
-  const total = countRow ? countRow.n : 0;
+  const countRow = await pool.query(`SELECT COUNT(*) as n FROM leads ${where}`, params);
+  const total = parseInt(countRow.rows[0].n);
 
   if (doExport === '1') {
-    const rows = dbAll(`SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir}`, ...params);
+    const rows = (await pool.query(`SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir}`, params)).rows;
     if (!rows.length) {
       res.setHeader('Content-Type', 'text/csv');
       return res.send('No data');
@@ -281,49 +314,56 @@ app.get('/api/leads', requireAuth, (req, res) => {
   }
 
   const offset = (parseInt(page) - 1) * parseInt(limit);
-  const rows = dbAll(
-    `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`,
-    ...params, parseInt(limit), offset
-  );
+  const limitParam = paramIdx++;
+  const offsetParam = paramIdx++;
+  const rows = (await pool.query(
+    `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT $${limitParam} OFFSET $${offsetParam}`,
+    [...params, parseInt(limit), offset]
+  )).rows;
   res.json({ total, page: parseInt(page), limit: parseInt(limit), rows });
 });
 
-app.get('/api/leads/:id', requireAuth, (req, res) => {
-  const lead = dbGet('SELECT * FROM leads WHERE id = ?', req.params.id);
+app.get('/api/leads/:id', requireAuth, async (req, res) => {
+  const lead = await pgGet('SELECT * FROM leads WHERE id = ?', req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
   res.json(lead);
 });
 
-app.patch('/api/leads/:id', requireAuth, (req, res) => {
+app.patch('/api/leads/:id', requireAuth, async (req, res) => {
   const allowed = ['status','notes','email_sent','date_sent','last_contacted','next_followup'];
   const sets = [];
   const vals = [];
+  let idx = 1;
   for (const k of allowed) {
-    if (k in req.body) { sets.push(`${k} = ?`); vals.push(req.body[k]); }
+    if (k in req.body) { sets.push(`${k} = $${idx++}`); vals.push(req.body[k]); }
   }
   if (!sets.length) return res.json({ ok: true });
   vals.push(req.params.id);
-  dbRun(`UPDATE leads SET ${sets.join(', ')} WHERE id = ?`, ...vals);
+  await pool.query(`UPDATE leads SET ${sets.join(', ')} WHERE id = $${idx}`, vals);
   res.json({ ok: true });
 });
 
-app.post('/api/leads/bulk-status', requireAuth, (req, res) => {
+app.post('/api/leads/bulk-status', requireAuth, async (req, res) => {
   const { ids, status } = req.body;
   if (!ids || !ids.length || !status) return res.status(400).json({ error: 'Missing ids or status' });
-  const placeholders = ids.map(() => '?').join(',');
-  dbRun(`UPDATE leads SET status = ? WHERE id IN (${placeholders})`, status, ...ids);
+  const placeholders = ids.map((_, i) => `$${i + 2}`).join(',');
+  await pool.query(`UPDATE leads SET status = $1 WHERE id IN (${placeholders})`, [status, ...ids]);
   res.json({ ok: true, updated: ids.length });
 });
 
 // ── Email Template ────────────────────────────────────────────────────────────
-app.get('/api/template', requireAuth, (req, res) => {
-  const t = dbGet('SELECT * FROM email_template WHERE id = 1');
+app.get('/api/template', requireAuth, async (req, res) => {
+  const t = await pgGet('SELECT * FROM email_template WHERE id = 1');
   res.json(t || { subject: '', body: '' });
 });
 
-app.post('/api/template', requireAuth, (req, res) => {
+app.post('/api/template', requireAuth, async (req, res) => {
   const { subject, body } = req.body;
-  dbRun(`INSERT OR REPLACE INTO email_template (id, subject, body, updated_at) VALUES (1, ?, ?, datetime('now'))`, subject, body);
+  await pool.query(
+    `INSERT INTO email_template (id, subject, body, updated_at) VALUES (1, $1, $2, NOW())
+     ON CONFLICT (id) DO UPDATE SET subject = $1, body = $2, updated_at = NOW()`,
+    [subject, body]
+  );
   res.json({ ok: true });
 });
 
@@ -349,11 +389,11 @@ function applyMergeFields(text, lead) {
 }
 
 app.post('/api/send-email/:id', requireAuth, async (req, res) => {
-  const lead = dbGet('SELECT * FROM leads WHERE id = ?', req.params.id);
+  const lead = await pgGet('SELECT * FROM leads WHERE id = ?', req.params.id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
   if (!lead.email) return res.status(400).json({ error: 'No email for this lead' });
 
-  const template = dbGet('SELECT * FROM email_template WHERE id = 1');
+  const template = await pgGet('SELECT * FROM email_template WHERE id = 1');
   if (!template) return res.status(400).json({ error: 'No template configured' });
 
   const subject = applyMergeFields(template.subject, lead);
@@ -362,11 +402,11 @@ app.post('/api/send-email/:id', requireAuth, async (req, res) => {
   try {
     await transporter.sendMail({ from: 'DJ Bonifacic <qbonifacic@icloud.com>', to: lead.email, subject, text: body });
     const now = new Date().toISOString().slice(0, 10);
-    dbRun(`UPDATE leads SET email_sent=1, date_sent=? WHERE id=?`, now, lead.id);
-    dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`, lead.id, lead.email, subject, 'sent');
+    await pgRun(`UPDATE leads SET email_sent=1, date_sent=? WHERE id=?`, now, lead.id);
+    await pgRun(`INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`, lead.id, lead.email, subject, 'sent');
     res.json({ ok: true });
   } catch (err) {
-    dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`, lead.id, lead.email, subject, 'error', err.message);
+    await pgRun(`INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`, lead.id, lead.email, subject, 'error', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -374,26 +414,26 @@ app.post('/api/send-email/:id', requireAuth, async (req, res) => {
 app.post('/api/send-batch', requireAuth, async (req, res) => {
   const { ids } = req.body;
   if (!ids || !ids.length) return res.status(400).json({ error: 'No ids' });
-  const template = dbGet('SELECT * FROM email_template WHERE id = 1');
+  const template = await pgGet('SELECT * FROM email_template WHERE id = 1');
   if (!template) return res.status(400).json({ error: 'No template' });
 
   const results = [];
   const toSend = ids.slice(0, 20);
 
   for (const id of toSend) {
-    const lead = dbGet('SELECT * FROM leads WHERE id = ?', id);
+    const lead = await pgGet('SELECT * FROM leads WHERE id = ?', id);
     if (!lead || !lead.email) { results.push({ id, status: 'skipped', reason: lead ? 'no email' : 'not found' }); continue; }
     const subject = applyMergeFields(template.subject, lead);
     const body = applyMergeFields(template.body, lead);
     try {
       await transporter.sendMail({ from: 'DJ Bonifacic <qbonifacic@icloud.com>', to: lead.email, subject, text: body });
       const now = new Date().toISOString().slice(0, 10);
-      dbRun(`UPDATE leads SET email_sent=1, date_sent=? WHERE id=?`, now, lead.id);
-      dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`, lead.id, lead.email, subject, 'sent');
+      await pgRun(`UPDATE leads SET email_sent=1, date_sent=? WHERE id=?`, now, lead.id);
+      await pgRun(`INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`, lead.id, lead.email, subject, 'sent');
       results.push({ id, status: 'sent', email: lead.email });
       await new Promise(r => setTimeout(r, 3000));
     } catch (err) {
-      dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`, lead.id, lead.email, subject, 'error', err.message);
+      await pgRun(`INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`, lead.id, lead.email, subject, 'error', err.message);
       results.push({ id, status: 'error', error: err.message });
     }
   }
@@ -401,15 +441,15 @@ app.post('/api/send-batch', requireAuth, async (req, res) => {
 });
 
 // ── Filter options ────────────────────────────────────────────────────────────
-app.get('/api/filter-options', requireAuth, (req, res) => {
-  const cities = dbAll("SELECT DISTINCT city FROM leads WHERE city != '' ORDER BY city").map(r => r.city);
-  const segments = dbAll("SELECT DISTINCT segment FROM leads WHERE segment != '' ORDER BY segment").map(r => r.segment);
+app.get('/api/filter-options', requireAuth, async (req, res) => {
+  const cities = (await pgAll("SELECT DISTINCT city FROM leads WHERE city != '' ORDER BY city")).map(r => r.city);
+  const segments = (await pgAll("SELECT DISTINCT segment FROM leads WHERE segment != '' ORDER BY segment")).map(r => r.segment);
   res.json({ cities, segments });
 });
 
 // ── Email logs ────────────────────────────────────────────────────────────────
-app.get('/api/email-logs', requireAuth, (req, res) => {
-  const logs = dbAll('SELECT el.*, l.business_name FROM email_logs el LEFT JOIN leads l ON el.lead_id = l.id ORDER BY el.sent_at DESC LIMIT 200');
+app.get('/api/email-logs', requireAuth, async (req, res) => {
+  const logs = await pgAll('SELECT el.*, l.business_name FROM email_logs el LEFT JOIN leads l ON el.lead_id = l.id ORDER BY el.sent_at DESC LIMIT 200');
   res.json(logs);
 });
 
@@ -418,6 +458,18 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`✓ NoCo CRM running on port ${PORT}`);
+// ── Boot ──────────────────────────────────────────────────────────────────────
+async function boot() {
+  await initSchema();
+  await seedUser();
+  await seedTemplate();
+  await seedLeads();
+  app.listen(PORT, () => {
+    console.log(`✓ NoCo CRM running on port ${PORT}`);
+  });
+}
+
+boot().catch(err => {
+  console.error('Boot failed:', err);
+  process.exit(1);
 });
