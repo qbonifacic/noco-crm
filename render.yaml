@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: noco-crm
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    branch: main
