@@ -1,0 +1,20 @@
+{
+  "name": "noco-crm",
+  "version": "1.0.0",
+  "description": "NoCo AI Outreach CRM",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "nodemailer": "^6.9.9",
+    "bcryptjs": "^2.4.3",
+    "express-session": "^1.17.3",
+    "csv-parse": "^5.5.3",
+    "cors": "^2.8.5"
+  }
+}

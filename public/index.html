@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NoCo AI CRM</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen" class="login-wrap hidden">
+  <div class="login-box">
+    <div class="login-logo">⚡ NoCo AI CRM</div>
+    <form id="login-form">
+      <input type="text" id="login-user" placeholder="Username" autocomplete="username" required>
+      <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-primary">Sign In</button>
+      <div id="login-error" class="error-msg hidden">Invalid credentials</div>
+    </form>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app" class="hidden">
+
+  <!-- NAVBAR -->
+  <nav class="navbar">
+    <div class="nav-brand">⚡ NoCo AI CRM</div>
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-tab="leads">Leads</button>
+      <button class="nav-tab" data-tab="template">Email Template</button>
+      <button class="nav-tab" data-tab="logs">Email Logs</button>
+    </div>
+    <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
+  </nav>
+
+  <!-- STATS BAR -->
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-item"><span class="stat-val" id="s-total">—</span><span class="stat-label">Total</span></div>
+    <div class="stat-item pursuing"><span class="stat-val" id="s-pursuing">—</span><span class="stat-label">Pursuing</span></div>
+    <div class="stat-item maybe"><span class="stat-val" id="s-maybe">—</span><span class="stat-label">Maybe</span></div>
+    <div class="stat-item hidden-stat"><span class="stat-val" id="s-hidden">—</span><span class="stat-label">Hidden</span></div>
+    <div class="stat-item untouched"><span class="stat-val" id="s-untouched">—</span><span class="stat-label">Untouched</span></div>
+    <div class="stat-item emailed"><span class="stat-val" id="s-emailed">—</span><span class="stat-label">Emailed</span></div>
+    <div class="stat-item has-email"><span class="stat-val" id="s-has-email">—</span><span class="stat-label">w/ Email</span></div>
+  </div>
+
+  <!-- LEADS TAB -->
+  <div id="tab-leads" class="tab-content active">
+    <!-- FILTERS -->
+    <div class="filters-bar">
+      <input type="text" id="search-box" placeholder="🔍 Search name, city, address…" class="filter-input search-wide">
+      <select id="f-city" class="filter-select"><option value="">All Cities</option></select>
+      <select id="f-segment" class="filter-select"><option value="">All Segments</option></select>
+      <select id="f-status" class="filter-select">
+        <option value="">All Status</option>
+        <option value="pursue">Pursue</option>
+        <option value="maybe">Maybe</option>
+        <option value="hide">Hide</option>
+        <option value="untouched">Untouched</option>
+      </select>
+      <select id="f-rating" class="filter-select">
+        <option value="">Any Rating</option>
+        <option value="4">4★+</option>
+        <option value="4.5">4.5★+</option>
+        <option value="5">5★</option>
+      </select>
+      <select id="f-email" class="filter-select">
+        <option value="">Email: All</option>
+        <option value="yes">Has Email</option>
+        <option value="no">No Email</option>
+      </select>
+      <select id="f-phone" class="filter-select">
+        <option value="">Phone: All</option>
+        <option value="yes">Has Phone</option>
+        <option value="no">No Phone</option>
+      </select>
+      <select id="f-website" class="filter-select">
+        <option value="">Website: All</option>
+        <option value="yes">Has Website</option>
+        <option value="no">No Website</option>
+      </select>
+      <button id="reset-filters" class="btn btn-ghost">Reset</button>
+      <button id="export-btn" class="btn btn-ghost">⬇ CSV</button>
+    </div>
+
+    <!-- BULK ACTIONS -->
+    <div class="bulk-bar" id="bulk-bar" style="display:none">
+      <span id="bulk-count">0 selected</span>
+      <select id="bulk-status-sel" class="filter-select">
+        <option value="pursue">→ Pursue</option>
+        <option value="maybe">→ Maybe</option>
+        <option value="hide">→ Hide</option>
+        <option value="untouched">→ Untouched</option>
+      </select>
+      <button id="bulk-apply" class="btn btn-primary">Apply</button>
+      <button id="bulk-send" class="btn btn-warning">📧 Batch Email (max 20)</button>
+      <button id="bulk-clear" class="btn btn-ghost">Clear</button>
+    </div>
+
+    <!-- TABLE -->
+    <div class="table-wrap">
+      <table class="leads-table" id="leads-table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="select-all"></th>
+            <th class="sortable" data-col="business_name">Business ↕</th>
+            <th class="sortable" data-col="segment">Segment ↕</th>
+            <th class="sortable" data-col="city">City ↕</th>
+            <th>Phone</th>
+            <th>Email</th>
+            <th class="sortable" data-col="google_rating">G★ ↕</th>
+            <th class="sortable" data-col="google_review_count">#Rev ↕</th>
+            <th class="sortable" data-col="status">Status ↕</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="leads-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- PAGINATION -->
+    <div class="pagination" id="pagination"></div>
+  </div>
+
+  <!-- EMAIL TEMPLATE TAB -->
+  <div id="tab-template" class="tab-content hidden">
+    <div class="template-editor">
+      <h2>Email Template</h2>
+      <div class="merge-hint">
+        Merge fields: <code>[First Name]</code> <code>[Business Name]</code> <code>[City]</code> <code>[Segment]</code>
+      </div>
+      <div class="template-form">
+        <label>Subject</label>
+        <input type="text" id="tmpl-subject" class="tmpl-input">
+        <label>Body</label>
+        <textarea id="tmpl-body" class="tmpl-body" rows="20"></textarea>
+        <button id="tmpl-save" class="btn btn-primary">💾 Save Template</button>
+        <span id="tmpl-saved" class="save-ok hidden">✓ Saved!</span>
+      </div>
+      <div class="template-preview">
+        <h3>Live Preview <span class="preview-note">(sample data)</span></h3>
+        <div class="preview-subject" id="preview-subject"></div>
+        <pre class="preview-body" id="preview-body"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMAIL LOGS TAB -->
+  <div id="tab-logs" class="tab-content hidden">
+    <div class="logs-wrap">
+      <h2>Email Logs <button id="refresh-logs" class="btn btn-ghost">↻ Refresh</button></h2>
+      <table class="leads-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Business</th>
+            <th>Recipient</th>
+            <th>Subject</th>
+            <th>Status</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="logs-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<!-- LEAD DETAIL PANEL -->
+<div id="detail-overlay" class="detail-overlay hidden"></div>
+<div id="detail-panel" class="detail-panel hidden">
+  <div class="detail-header">
+    <h2 id="detail-title">Lead Detail</h2>
+    <button id="detail-close" class="btn-icon">✕</button>
+  </div>
+  <div class="detail-body" id="detail-body">
+    <!-- filled by JS -->
+  </div>
+</div>
+
+<!-- BATCH PROGRESS MODAL -->
+<div id="batch-modal" class="modal hidden">
+  <div class="modal-box">
+    <h3>Sending Emails…</h3>
+    <div id="batch-progress-text">Preparing…</div>
+    <div class="progress-bar-wrap"><div class="progress-bar-fill" id="batch-bar"></div></div>
+    <div id="batch-results"></div>
+    <button id="batch-close" class="btn btn-primary hidden">Close</button>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

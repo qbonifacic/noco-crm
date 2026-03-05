@@ -1,0 +1,423 @@
+'use strict';
+
+const express = require('express');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
+const path = require('path');
+const fs = require('fs');
+const { DatabaseSync } = require('node:sqlite');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// DB path
+const DB_PATH = process.env.NODE_ENV === 'production'
+  ? (fs.existsSync('/data') ? '/data/noco-crm.db' : '/tmp/noco-crm.db')
+  : path.join(__dirname, 'noco-crm.db');
+
+const db = new DatabaseSync(DB_PATH);
+
+// ── Schema ────────────────────────────────────────────────────────────────────
+db.exec(`PRAGMA journal_mode = WAL;`);
+db.exec(`PRAGMA foreign_keys = ON;`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    business_name TEXT DEFAULT '',
+    segment TEXT DEFAULT '',
+    city TEXT DEFAULT '',
+    address TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    website TEXT DEFAULT '',
+    yelp_url TEXT DEFAULT '',
+    yelp_rating REAL,
+    yelp_review_count INTEGER,
+    google_rating REAL,
+    google_review_count INTEGER,
+    years_in_business TEXT DEFAULT '',
+    owner_name TEXT DEFAULT '',
+    email TEXT DEFAULT '',
+    social_media TEXT DEFAULT '',
+    source TEXT DEFAULT '',
+    status TEXT DEFAULT 'untouched',
+    notes TEXT DEFAULT '',
+    email_sent INTEGER DEFAULT 0,
+    date_sent TEXT DEFAULT '',
+    last_contacted TEXT DEFAULT '',
+    next_followup TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS email_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER,
+    recipient TEXT,
+    subject TEXT,
+    status TEXT,
+    sent_at TEXT DEFAULT (datetime('now')),
+    error TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS email_template (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    subject TEXT,
+    body TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    password_hash TEXT
+  );
+`);
+
+// ── Helper: prepared statement wrappers ───────────────────────────────────────
+// node:sqlite uses positional ? params only (no named @param support for all versions)
+// We'll build queries dynamically
+
+function dbGet(sql, ...params) {
+  const stmt = db.prepare(sql);
+  return stmt.get(...params);
+}
+
+function dbAll(sql, ...params) {
+  const stmt = db.prepare(sql);
+  return stmt.all(...params);
+}
+
+function dbRun(sql, ...params) {
+  const stmt = db.prepare(sql);
+  return stmt.run(...params);
+}
+
+// ── Seed user ─────────────────────────────────────────────────────────────────
+const existingUser = dbGet('SELECT id FROM users WHERE username = ?', 'dj');
+if (!existingUser) {
+  const hash = bcrypt.hashSync('wolfpack2026', 10);
+  dbRun('INSERT INTO users (username, password_hash) VALUES (?, ?)', 'dj', hash);
+  console.log('✓ User dj created');
+}
+
+// ── Seed default email template ───────────────────────────────────────────────
+const existingTemplate = dbGet('SELECT id FROM email_template WHERE id = 1');
+if (!existingTemplate) {
+  dbRun(
+    `INSERT INTO email_template (id, subject, body) VALUES (1, ?, ?)`,
+    'How I cut lead response time to 60 seconds (and what it did to revenue)',
+    `Hi [First Name],
+
+My name is DJ Bonifacic — I've spent 8+ years building AI systems, analytics, and automation infrastructure for growing companies. I'm based in Fort Collins, and I'm selectively helping a handful of NoCo businesses deploy their first AI tool — at no cost.
+
+Not a chatbot. An actual autonomous system that answers calls, qualifies leads, sends quotes, and follows up — while you sleep.
+
+I'll build it, set it up, and hand you the keys. No catch. I want to show you what's possible. The reality is, AI can solve dozens of problems across your business — lead flow is just the easiest place to start and the fastest to show results.
+
+Here's what the first tool typically handles:
+- After-hours call comes in? Agent answers, captures the lead, follows up automatically
+- New web inquiry? Text goes out in under 60 seconds
+- Slow period? Agent reactivates your existing customer list on autopilot
+
+Once you see it working, we can dig into wherever else you're losing time or money — scheduling, estimating, hiring, reporting, customer retention. There's almost no business problem AI can't meaningfully improve right now.
+
+I have capacity for 3 businesses in NoCo this month. First come, first served.
+
+Worth a 15-minute call?
+
+— DJ Bonifacic
+Fort Collins, CO
+qbonifacic@icloud.com`
+  );
+  console.log('✓ Default email template created');
+}
+
+// ── CSV Import ────────────────────────────────────────────────────────────────
+const existingLeads = dbGet('SELECT COUNT(*) as cnt FROM leads');
+if (!existingLeads || existingLeads.cnt === 0) {
+  const csvPath = process.env.CSV_PATH || '/Users/qbot/.openclaw/workspace/research/noco_scraper/noco_businesses_top.csv';
+  if (fs.existsSync(csvPath)) {
+    const { parse } = require('csv-parse/sync');
+    const raw = fs.readFileSync(csvPath, 'utf8');
+    const records = parse(raw, { columns: true, skip_empty_lines: true, relax_quotes: true });
+
+    const insertSQL = `INSERT INTO leads (business_name, segment, city, address, phone, website, yelp_url,
+      yelp_rating, yelp_review_count, google_rating, google_review_count,
+      years_in_business, owner_name, email, social_media, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    // Use transaction for speed
+    db.exec('BEGIN');
+    try {
+      const stmt = db.prepare(insertSQL);
+      for (const r of records) {
+        stmt.run(
+          r.business_name || '',
+          r.segment || '',
+          r.city || '',
+          r.address || '',
+          r.phone || '',
+          r.website || '',
+          r.yelp_url || '',
+          r.yelp_rating ? parseFloat(r.yelp_rating) : null,
+          r.yelp_review_count ? parseInt(r.yelp_review_count) : null,
+          r.google_rating ? parseFloat(r.google_rating) : null,
+          r.google_review_count ? parseInt(r.google_review_count) : null,
+          r.years_in_business || '',
+          r.owner_name || '',
+          r.email || '',
+          r.social_media || '',
+          r.source || ''
+        );
+      }
+      db.exec('COMMIT');
+      console.log(`✓ Imported ${records.length} leads from CSV`);
+    } catch (e) {
+      db.exec('ROLLBACK');
+      console.error('CSV import failed:', e.message);
+    }
+  } else {
+    console.log('⚠ CSV not found at', csvPath);
+  }
+}
+
+// ── Middleware ────────────────────────────────────────────────────────────────
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'wolfpack2026secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false, maxAge: 86400000 * 7 }
+}));
+
+const requireAuth = (req, res, next) => {
+  if (req.session && req.session.userId) return next();
+  res.status(401).json({ error: 'Unauthorized' });
+};
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  const user = dbGet('SELECT * FROM users WHERE username = ?', username);
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  req.session.userId = user.id;
+  req.session.username = user.username;
+  res.json({ ok: true });
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy();
+  res.json({ ok: true });
+});
+
+app.get('/api/me', (req, res) => {
+  if (req.session && req.session.userId) {
+    res.json({ loggedIn: true, username: req.session.username });
+  } else {
+    res.json({ loggedIn: false });
+  }
+});
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+app.get('/api/stats', requireAuth, (req, res) => {
+  res.json({
+    total: dbGet('SELECT COUNT(*) as n FROM leads').n,
+    pursuing: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='pursue'").n,
+    hidden: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='hide'").n,
+    maybe: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='maybe'").n,
+    untouched: dbGet("SELECT COUNT(*) as n FROM leads WHERE status='untouched'").n,
+    emails_sent: dbGet("SELECT COUNT(*) as n FROM leads WHERE email_sent=1").n,
+    has_email: dbGet("SELECT COUNT(*) as n FROM leads WHERE email != ''").n,
+  });
+});
+
+// ── Leads ─────────────────────────────────────────────────────────────────────
+app.get('/api/leads', requireAuth, (req, res) => {
+  const {
+    page = 1, limit = 50, sort = 'id', dir = 'asc',
+    city, segment, status, min_rating, has_email, has_phone, has_website,
+    search, export: doExport
+  } = req.query;
+
+  const allowed_sorts = ['id','business_name','segment','city','google_rating','google_review_count','yelp_rating','status','email_sent'];
+  const sortCol = allowed_sorts.includes(sort) ? sort : 'id';
+  const sortDir = dir === 'desc' ? 'DESC' : 'ASC';
+
+  const conditions = [];
+  const params = [];
+
+  if (city) { conditions.push('city = ?'); params.push(city); }
+  if (segment) { conditions.push('segment = ?'); params.push(segment); }
+  if (status) { conditions.push('status = ?'); params.push(status); }
+  if (min_rating) { conditions.push('google_rating >= ?'); params.push(parseFloat(min_rating)); }
+  if (has_email === 'yes') conditions.push("email != ''");
+  if (has_email === 'no') conditions.push("(email IS NULL OR email = '')");
+  if (has_phone === 'yes') conditions.push("phone != ''");
+  if (has_phone === 'no') conditions.push("(phone IS NULL OR phone = '')");
+  if (has_website === 'yes') conditions.push("website != ''");
+  if (has_website === 'no') conditions.push("(website IS NULL OR website = '')");
+  if (search) { conditions.push("(business_name LIKE ? OR city LIKE ? OR address LIKE ?)"); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+  const countRow = dbGet(`SELECT COUNT(*) as n FROM leads ${where}`, ...params);
+  const total = countRow ? countRow.n : 0;
+
+  if (doExport === '1') {
+    const rows = dbAll(`SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir}`, ...params);
+    if (!rows.length) {
+      res.setHeader('Content-Type', 'text/csv');
+      return res.send('No data');
+    }
+    const cols = Object.keys(rows[0]);
+    const csv = [cols.join(','), ...rows.map(r => cols.map(c => JSON.stringify(r[c] ?? '')).join(','))].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="leads.csv"');
+    return res.send(csv);
+  }
+
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  const rows = dbAll(
+    `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`,
+    ...params, parseInt(limit), offset
+  );
+  res.json({ total, page: parseInt(page), limit: parseInt(limit), rows });
+});
+
+app.get('/api/leads/:id', requireAuth, (req, res) => {
+  const lead = dbGet('SELECT * FROM leads WHERE id = ?', req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Not found' });
+  res.json(lead);
+});
+
+app.patch('/api/leads/:id', requireAuth, (req, res) => {
+  const allowed = ['status','notes','email_sent','date_sent','last_contacted','next_followup'];
+  const sets = [];
+  const vals = [];
+  for (const k of allowed) {
+    if (k in req.body) { sets.push(`${k} = ?`); vals.push(req.body[k]); }
+  }
+  if (!sets.length) return res.json({ ok: true });
+  vals.push(req.params.id);
+  dbRun(`UPDATE leads SET ${sets.join(', ')} WHERE id = ?`, ...vals);
+  res.json({ ok: true });
+});
+
+app.post('/api/leads/bulk-status', requireAuth, (req, res) => {
+  const { ids, status } = req.body;
+  if (!ids || !ids.length || !status) return res.status(400).json({ error: 'Missing ids or status' });
+  const placeholders = ids.map(() => '?').join(',');
+  dbRun(`UPDATE leads SET status = ? WHERE id IN (${placeholders})`, status, ...ids);
+  res.json({ ok: true, updated: ids.length });
+});
+
+// ── Email Template ────────────────────────────────────────────────────────────
+app.get('/api/template', requireAuth, (req, res) => {
+  const t = dbGet('SELECT * FROM email_template WHERE id = 1');
+  res.json(t || { subject: '', body: '' });
+});
+
+app.post('/api/template', requireAuth, (req, res) => {
+  const { subject, body } = req.body;
+  dbRun(`INSERT OR REPLACE INTO email_template (id, subject, body, updated_at) VALUES (1, ?, ?, datetime('now'))`, subject, body);
+  res.json({ ok: true });
+});
+
+// ── Email Sending ─────────────────────────────────────────────────────────────
+const transporter = nodemailer.createTransport({
+  host: 'smtp.mail.me.com',
+  port: 587,
+  secure: false,
+  requireTLS: true,
+  auth: {
+    user: 'qbonifacic@icloud.com',
+    pass: 'jlqh-kqtb-dafj-pebc'
+  }
+});
+
+function applyMergeFields(text, lead) {
+  const firstName = (lead.owner_name || lead.business_name || 'there').split(' ')[0];
+  return text
+    .replace(/\[First Name\]/g, firstName)
+    .replace(/\[Business Name\]/g, lead.business_name || '')
+    .replace(/\[City\]/g, lead.city || '')
+    .replace(/\[Segment\]/g, lead.segment || '');
+}
+
+app.post('/api/send-email/:id', requireAuth, async (req, res) => {
+  const lead = dbGet('SELECT * FROM leads WHERE id = ?', req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  if (!lead.email) return res.status(400).json({ error: 'No email for this lead' });
+
+  const template = dbGet('SELECT * FROM email_template WHERE id = 1');
+  if (!template) return res.status(400).json({ error: 'No template configured' });
+
+  const subject = applyMergeFields(template.subject, lead);
+  const body = applyMergeFields(template.body, lead);
+
+  try {
+    await transporter.sendMail({ from: 'DJ Bonifacic <qbonifacic@icloud.com>', to: lead.email, subject, text: body });
+    const now = new Date().toISOString().slice(0, 10);
+    dbRun(`UPDATE leads SET email_sent=1, date_sent=? WHERE id=?`, now, lead.id);
+    dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`, lead.id, lead.email, subject, 'sent');
+    res.json({ ok: true });
+  } catch (err) {
+    dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`, lead.id, lead.email, subject, 'error', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/send-batch', requireAuth, async (req, res) => {
+  const { ids } = req.body;
+  if (!ids || !ids.length) return res.status(400).json({ error: 'No ids' });
+  const template = dbGet('SELECT * FROM email_template WHERE id = 1');
+  if (!template) return res.status(400).json({ error: 'No template' });
+
+  const results = [];
+  const toSend = ids.slice(0, 20);
+
+  for (const id of toSend) {
+    const lead = dbGet('SELECT * FROM leads WHERE id = ?', id);
+    if (!lead || !lead.email) { results.push({ id, status: 'skipped', reason: lead ? 'no email' : 'not found' }); continue; }
+    const subject = applyMergeFields(template.subject, lead);
+    const body = applyMergeFields(template.body, lead);
+    try {
+      await transporter.sendMail({ from: 'DJ Bonifacic <qbonifacic@icloud.com>', to: lead.email, subject, text: body });
+      const now = new Date().toISOString().slice(0, 10);
+      dbRun(`UPDATE leads SET email_sent=1, date_sent=? WHERE id=?`, now, lead.id);
+      dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`, lead.id, lead.email, subject, 'sent');
+      results.push({ id, status: 'sent', email: lead.email });
+      await new Promise(r => setTimeout(r, 3000));
+    } catch (err) {
+      dbRun(`INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`, lead.id, lead.email, subject, 'error', err.message);
+      results.push({ id, status: 'error', error: err.message });
+    }
+  }
+  res.json({ ok: true, results, skipped: ids.length - toSend.length });
+});
+
+// ── Filter options ────────────────────────────────────────────────────────────
+app.get('/api/filter-options', requireAuth, (req, res) => {
+  const cities = dbAll("SELECT DISTINCT city FROM leads WHERE city != '' ORDER BY city").map(r => r.city);
+  const segments = dbAll("SELECT DISTINCT segment FROM leads WHERE segment != '' ORDER BY segment").map(r => r.segment);
+  res.json({ cities, segments });
+});
+
+// ── Email logs ────────────────────────────────────────────────────────────────
+app.get('/api/email-logs', requireAuth, (req, res) => {
+  const logs = dbAll('SELECT el.*, l.business_name FROM email_logs el LEFT JOIN leads l ON el.lead_id = l.id ORDER BY el.sent_at DESC LIMIT 200');
+  res.json(logs);
+});
+
+// ── SPA catch-all ─────────────────────────────────────────────────────────────
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`✓ NoCo CRM running on port ${PORT}`);
+});
