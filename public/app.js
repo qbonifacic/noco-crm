@@ -136,7 +136,7 @@ function setupFilters() {
     searchDebounce = setTimeout(() => { state.page = 1; collectFilters(); loadLeads(); }, 350);
   });
   $('reset-filters').addEventListener('click', () => {
-    ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website'].forEach(id => $(id).value = '');
+    ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-min-contacts'].forEach(id => $(id).value = '');
     $('search-box').value = '';
     state.filters = {};
     state.page = 1;
@@ -164,6 +164,7 @@ function collectFilters() {
   const status = $('f-status').value; if (status) state.filters.status = status;
   const rating = $('f-rating').value; if (rating) state.filters.min_rating = rating;
   const email = $('f-email').value; if (email) state.filters.has_email = email;
+  const mc = $('f-min-contacts').value; if (mc) state.filters.min_contacts = mc;
   const phone = $('f-phone').value; if (phone) state.filters.has_phone = phone;
   const website = $('f-website').value; if (website) state.filters.has_website = website;
   const search = $('search-box').value.trim(); if (search) state.filters.search = search;
@@ -204,6 +205,7 @@ function renderTable(rows) {
       <td>${esc(lead.city)}</td>
       <td class="text-dim">${esc(lead.phone)}</td>
       <td>${lead.email ? `<span title="${esc(lead.email)}">✉</span>${lead.email_sent ? ' <span class="emailed-dot" title="Email sent"></span>' : ''}` : '<span class="text-dim">—</span>'}</td>
+      <td>${lead.contact_count > 0 ? `<span class="contact-badge" title="${lead.contact_count} Hunter contacts">👥 ${lead.contact_count}</span>` : '<span class="text-dim">—</span>'}</td>
       <td>${lead.google_rating ? `<b>${lead.google_rating}</b>` : '<span class="text-dim">—</span>'}</td>
       <td class="text-dim">${lead.google_review_count || '—'}</td>
       <td><span class="badge badge-${lead.status || 'untouched'}">${lead.status || 'untouched'}</span></td>

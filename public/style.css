@@ -196,3 +196,15 @@ tr.status-untouched { background: var(--grey-bg); }
   .stats-bar { flex-wrap: wrap; }
   .stat-item { min-width: 80px; }
 }
+
+/* Hunter contact count badge */
+.contact-badge {
+  display: inline-block;
+  background: var(--accent, #4f8ef7);
+  color: #fff;
+  border-radius: 12px;
+  padding: 1px 8px;
+  font-size: 0.78em;
+  font-weight: 600;
+  white-space: nowrap;
+}

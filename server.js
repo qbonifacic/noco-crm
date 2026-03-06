@@ -276,7 +276,7 @@ app.get('/api/stats', requireAuth, async (req, res) => {
 app.get('/api/leads', requireAuth, async (req, res) => {
   const {
     page = 1, limit = 50, sort = 'id', dir = 'asc',
-    city, segment, status, min_rating, has_email, has_phone, has_website,
+    city, segment, status, min_rating, has_email, has_phone, has_website, min_contacts,
     search, export: doExport
   } = req.query;
 
@@ -298,6 +298,21 @@ app.get('/api/leads', requireAuth, async (req, res) => {
   if (has_phone === 'no') conditions.push("(phone IS NULL OR phone = '')");
   if (has_website === 'yes') conditions.push("website != ''");
   if (has_website === 'no') conditions.push("(website IS NULL OR website = '')");
+  if (min_contacts) {
+    const mc = parseInt(min_contacts);
+    if (!isNaN(mc) && mc > 0) {
+      const contactsExpr = `CASE WHEN contacts IS NOT NULL AND contacts != '' AND contacts != '[]' THEN jsonb_array_length(contacts::jsonb) ELSE 0 END`;
+      conditions.push(`${contactsExpr} >= $${paramIdx++}`);
+      params.push(mc);
+    }
+  }
+  if (min_contacts) {
+    const mc = parseInt(min_contacts);
+    if (!isNaN(mc) && mc > 0) {
+      conditions.push();
+      params.push(mc);
+    }
+  }
   if (search) {
     conditions.push(`(business_name ILIKE $${paramIdx} OR city ILIKE $${paramIdx+1} OR address ILIKE $${paramIdx+2})`);
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
@@ -309,7 +324,7 @@ app.get('/api/leads', requireAuth, async (req, res) => {
   const total = parseInt(countRow.rows[0].n);
 
   if (doExport === '1') {
-    const rows = (await pool.query(`SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir}`, params)).rows;
+    const rows = (await pool.query(`SELECT *, CASE WHEN contacts IS NOT NULL AND contacts != '' AND contacts != '[]' THEN jsonb_array_length(contacts::jsonb) ELSE 0 END AS contact_count FROM leads ${where} ORDER BY ${sortCol} ${sortDir}`, params)).rows;
     if (!rows.length) {
       res.setHeader('Content-Type', 'text/csv');
       return res.send('No data');
@@ -325,7 +340,7 @@ app.get('/api/leads', requireAuth, async (req, res) => {
   const limitParam = paramIdx++;
   const offsetParam = paramIdx++;
   const rows = (await pool.query(
-    `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT $${limitParam} OFFSET $${offsetParam}`,
+    `SELECT *, CASE WHEN contacts IS NOT NULL AND contacts != '' AND contacts != '[]' THEN jsonb_array_length(contacts::jsonb) ELSE 0 END AS contact_count FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT $${limitParam} OFFSET $${offsetParam}`,
     [...params, parseInt(limit), offset]
   )).rows;
   res.json({ total, page: parseInt(page), limit: parseInt(limit), rows });

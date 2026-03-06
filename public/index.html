@@ -81,6 +81,13 @@
         <option value="yes">Has Website</option>
         <option value="no">No Website</option>
       </select>
+      <select id="f-min-contacts" class="filter-select">
+        <option value="">Contacts: All</option>
+        <option value="1">1+ Contacts</option>
+        <option value="2">2+ Contacts</option>
+        <option value="3">3+ Contacts</option>
+        <option value="5">5+ Contacts</option>
+      </select>
       <button id="reset-filters" class="btn btn-ghost">Reset</button>
       <button id="export-btn" class="btn btn-ghost">⬇ CSV</button>
       <button id="enrich-btn" class="btn btn-primary">🔍 Enrich w/ Hunter.io</button>
@@ -111,6 +118,7 @@
             <th class="sortable" data-col="city">City ↕</th>
             <th>Phone</th>
             <th>Email</th>
+            <th>👥 Contacts</th>
             <th class="sortable" data-col="google_rating">G★ ↕</th>
             <th class="sortable" data-col="google_review_count">#Rev ↕</th>
             <th class="sortable" data-col="status">Status ↕</th>
