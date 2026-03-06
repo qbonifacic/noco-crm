@@ -187,6 +187,7 @@ function renderTable(rows) {
     const tr = document.createElement('tr');
     tr.className = `status-${lead.status || 'untouched'}`;
     tr.dataset.id = lead.id;
+    tr.dataset.status = lead.status || 'untouched';
     const checked = state.selected.has(lead.id) ? 'checked' : '';
     tr.innerHTML = `
       <td onclick="event.stopPropagation()"><input type="checkbox" class="row-check" data-id="${lead.id}" ${checked}></td>
@@ -231,8 +232,7 @@ function renderTable(rows) {
       const id = btn.dataset.id;
       const action = btn.dataset.action;
       const row = btn.closest('tr');
-      const currentBadge = row.querySelector('.badge');
-      const currentStatus = currentBadge ? currentBadge.textContent.trim() : 'untouched';
+      const currentStatus = row ? (row.dataset.status || 'untouched') : 'untouched';
       const newStatus = currentStatus === action ? 'untouched' : action;
       await api('PATCH', `/api/leads/${id}`, { status: newStatus });
       loadLeads(); loadStats();
@@ -576,19 +576,21 @@ $('refresh-logs').addEventListener('click', loadLogs);
 
 // ── Sticky Header Offset (Bug 1) ──────────────────────────────────────────────
 function updateStickyOffset() {
-  const navbar = document.querySelector('.navbar');
-  const statsBar = document.getElementById('stats-bar');
-  const filtersBar = document.querySelector('.filters-bar');
-  const bulkBar = document.getElementById('bulk-bar');
+  requestAnimationFrame(() => {
+    const navbar = document.querySelector('.navbar');
+    const statsBar = document.getElementById('stats-bar');
+    const filtersBar = document.querySelector('.filters-bar');
+    const bulkBar = document.getElementById('bulk-bar');
 
-  let offset = 0;
-  if (navbar) offset += navbar.offsetHeight;
-  if (statsBar) offset += statsBar.offsetHeight;
-  if (filtersBar) offset += filtersBar.offsetHeight;
-  if (bulkBar && bulkBar.style.display !== 'none') offset += bulkBar.offsetHeight;
+    let offset = 0;
+    if (navbar) offset += navbar.getBoundingClientRect().height;
+    if (statsBar) offset += statsBar.getBoundingClientRect().height;
+    if (filtersBar) offset += filtersBar.getBoundingClientRect().height;
+    if (bulkBar && bulkBar.style.display !== 'none') offset += bulkBar.getBoundingClientRect().height;
 
-  document.querySelectorAll('.leads-table th').forEach(th => {
-    th.style.top = offset + 'px';
+    document.querySelectorAll('.leads-table th').forEach(th => {
+      th.style.top = Math.round(offset) + 'px';
+    });
   });
 }
 
