@@ -78,6 +78,7 @@ async function initSchema() {
       date_sent TEXT DEFAULT '',
       last_contacted TEXT DEFAULT '',
       next_followup TEXT DEFAULT '',
+      contacts TEXT DEFAULT '',
       created_at TIMESTAMP DEFAULT NOW()
     );
 
@@ -382,19 +383,26 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
       const emails = data?.data?.emails;
       if (!emails || !emails.length) continue;
 
-      const first = emails[0];
-      const email = first.value;
-      if (!email) continue;
+      // Build full contacts list
+      const contacts = emails.map(e => ({
+        email: e.value,
+        name: [e.first_name, e.last_name].filter(Boolean).join(' '),
+        role: e.position || e.type || ''
+      }));
 
-      // Build update payload
-      const updates = { email };
-      if (!lead.owner_name && (first.first_name || first.last_name)) {
-        updates.owner_name = [first.first_name, first.last_name].filter(Boolean).join(' ');
-      }
+      // Prefer owner/founder for primary email
+      const preferred = emails.find(e => /owner|founder/i.test(e.position || e.type || '')) || emails[0];
+      const primaryEmail = preferred.value;
+      if (!primaryEmail) continue;
 
-      const sets = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`);
-      const vals = [...Object.values(updates), lead.id];
-      await pool.query(`UPDATE leads SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
+      const ownerName = (!lead.owner_name && (preferred.first_name || preferred.last_name))
+        ? [preferred.first_name, preferred.last_name].filter(Boolean).join(' ')
+        : lead.owner_name;
+
+      await pool.query(
+        `UPDATE leads SET email = $1, owner_name = COALESCE(NULLIF($2,''), owner_name), contacts = $3 WHERE id = $4`,
+        [primaryEmail, ownerName || '', JSON.stringify(contacts), lead.id]
+      );
       enriched++;
     } catch (e) {
       // skip individual lead errors
