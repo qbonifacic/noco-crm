@@ -91,8 +91,9 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 async function init() {
   await loadFilterOptions();
   await loadStats();
+  setupFilters();   // Bug 1 fix: attach listeners BEFORE first loadLeads()
+  collectFilters(); // ensure state.filters is populated from current DOM values
   await loadLeads();
-  setupFilters();
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -134,6 +135,18 @@ function setupFilters() {
     loadLeads();
   });
   $('export-btn').addEventListener('click', exportCSV);
+
+  // Bug 3: Hunter.io enrichment button
+  $('enrich-btn').addEventListener('click', async () => {
+    notify('Running Hunter.io enrichment…', true);
+    try {
+      const result = await api('POST', '/api/enrich', { limit: 100 });
+      notify(`Enriched ${result.enriched} of ${result.checked} leads`, true);
+      loadLeads(); loadStats();
+    } catch (err) {
+      notify('Enrichment failed: ' + err.message, false);
+    }
+  });
 }
 
 function collectFilters() {

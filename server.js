@@ -330,7 +330,8 @@ app.get('/api/leads/:id', requireAuth, async (req, res) => {
 });
 
 app.patch('/api/leads/:id', requireAuth, async (req, res) => {
-  const allowed = ['status','notes','email_sent','date_sent','last_contacted','next_followup'];
+  // Bug 4 fix: also allow email and owner_name (needed for enrichment and general updates)
+  const allowed = ['status','notes','email_sent','date_sent','last_contacted','next_followup','email','owner_name'];
   const sets = [];
   const vals = [];
   let idx = 1;
@@ -349,6 +350,58 @@ app.post('/api/leads/bulk-status', requireAuth, async (req, res) => {
   const placeholders = ids.map((_, i) => `$${i + 2}`).join(',');
   await pool.query(`UPDATE leads SET status = $1 WHERE id IN (${placeholders})`, [status, ...ids]);
   res.json({ ok: true, updated: ids.length });
+});
+
+// ── Hunter.io Enrichment ──────────────────────────────────────────────────────
+app.post('/api/enrich', requireAuth, async (req, res) => {
+  const limit = Math.min(parseInt(req.body.limit) || 100, 100);
+  const HUNTER_KEY = 'REDACTED_HUNTER_KEY';
+
+  const leads = (await pool.query(
+    `SELECT id, website, owner_name FROM leads WHERE (email IS NULL OR email = '') AND website != '' LIMIT $1`,
+    [limit]
+  )).rows;
+
+  let enriched = 0;
+  for (const lead of leads) {
+    try {
+      let domain = lead.website.trim();
+      // Extract domain from URL
+      if (domain.match(/^https?:\/\//i)) {
+        domain = new URL(domain).hostname.replace(/^www\./, '');
+      } else {
+        domain = domain.replace(/^www\./, '').split('/')[0];
+      }
+      if (!domain) continue;
+
+      const url = `https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(domain)}&api_key=${HUNTER_KEY}`;
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      const data = await resp.json();
+
+      const emails = data?.data?.emails;
+      if (!emails || !emails.length) continue;
+
+      const first = emails[0];
+      const email = first.value;
+      if (!email) continue;
+
+      // Build update payload
+      const updates = { email };
+      if (!lead.owner_name && (first.first_name || first.last_name)) {
+        updates.owner_name = [first.first_name, first.last_name].filter(Boolean).join(' ');
+      }
+
+      const sets = Object.keys(updates).map((k, i) => `${k} = $${i + 1}`);
+      const vals = [...Object.values(updates), lead.id];
+      await pool.query(`UPDATE leads SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
+      enriched++;
+    } catch (e) {
+      // skip individual lead errors
+    }
+  }
+
+  res.json({ enriched, checked: leads.length });
 });
 
 // ── Email Template ────────────────────────────────────────────────────────────
