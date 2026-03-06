@@ -603,10 +603,15 @@ function renderContacts(contactsJson) {
       <label>Hunter.io Contacts</label>
       <div class="contacts-list">
         ${contacts.map(c => `<div class="contact-item">
-          <span class="contact-email">${esc(c.email)}</span>
-          ${c.name ? `<span class="contact-name">${esc(c.name)}</span>` : ''}
-          ${c.role ? `<span class="contact-role text-dim">${esc(c.role)}</span>` : ''}
-          <button class="btn btn-sm btn-ghost" onclick="copyEmail('${esc(c.email)}')">Copy</button>
+          <div class="contact-info">
+            <span class="contact-email">${esc(c.email)}</span>
+            ${c.name ? `<span class="contact-name">${esc(c.name)}</span>` : ''}
+            ${c.role ? `<span class="contact-role text-dim">${esc(c.role)}</span>` : ''}
+          </div>
+          <div class="contact-actions">
+            <button class="btn btn-sm btn-ghost" onclick="copyEmail('${esc(c.email)}')">Copy</button>
+            <button class="btn btn-sm btn-primary" onclick="sendToContact(${lead.id},'${esc(c.email)}','${esc(c.name)}')">📧 Send</button>
+          </div>
         </div>`).join('')}
       </div>
     </div>`;
@@ -617,6 +622,17 @@ function copyEmail(email) {
   navigator.clipboard.writeText(email).then(() => notify('Copied!'));
 }
 window.copyEmail = copyEmail;
+
+async function sendToContact(leadId, email, name) {
+  if (!confirm(`Send email to ${name || email}?`)) return;
+  try {
+    await api('POST', `/api/send-email-to/${leadId}`, { email, name });
+    notify(`Sent to ${email}!`);
+  } catch (err) {
+    notify('Send failed: ' + err.message, false);
+  }
+}
+window.sendToContact = sendToContact;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 checkAuth();

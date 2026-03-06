@@ -76,7 +76,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .tab-content.active { display: block; }
 
 /* ── Filters ──────────────────────────────────────────────────────────────── */
-.filters-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); align-items: center; position: sticky; top: 104px; z-index: 48; }
+.filters-bar { display: flex; flex-wrap: nowrap; gap: 8px; padding: 10px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); align-items: center; position: sticky; top: 104px; z-index: 48; overflow-x: auto; }
 .filter-input, .filter-select { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 6px 10px; font-size: 13px; }
 .filter-input:focus, .filter-select:focus { outline: none; border-color: var(--accent); }
 .search-wide { flex: 1; min-width: 200px; }
@@ -182,10 +182,12 @@ tr.status-untouched { background: var(--grey-bg); }
 
 /* ── Hunter.io Contacts ───────────────────────────────────────────────────── */
 .contacts-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
-.contact-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--bg3); border-radius: 6px; flex-wrap: wrap; }
+.contact-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; background: var(--bg3); border-radius: 6px; }
+.contact-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.contact-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .contact-email { color: var(--accent); font-size: 13px; }
-.contact-name { font-weight: 500; }
-.contact-role { font-size: 12px; }
+.contact-name { font-weight: 500; font-size: 12px; }
+.contact-role { font-size: 11px; color: var(--text-dim); }
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {

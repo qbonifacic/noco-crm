@@ -412,6 +412,31 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
   res.json({ enriched, checked: leads.length });
 });
 
+// ── Send to specific contact email (Hunter.io contacts) ───────────────────────
+app.post('/api/send-email-to/:id', requireAuth, async (req, res) => {
+  const { email, name } = req.body;
+  if (!email) return res.status(400).json({ error: 'No email provided' });
+  const lead = await pgGet('SELECT * FROM leads WHERE id = ?', req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  const template = await pgGet('SELECT * FROM email_template WHERE id = 1');
+  if (!template) return res.status(400).json({ error: 'No template configured' });
+
+  // Use contact name if provided for merge fields
+  const mergedLead = { ...lead, owner_name: name || lead.owner_name };
+  const subject = applyMergeFields(template.subject, mergedLead);
+  const body = applyMergeFields(template.body, mergedLead);
+
+  try {
+    await transporter.sendMail({ from: 'DJ Bonifacic <qbonifacic@icloud.com>', to: email, subject, text: body });
+    const now = new Date().toISOString().slice(0, 10);
+    await pgRun(`INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`, lead.id, email, subject, 'sent');
+    res.json({ ok: true });
+  } catch (err) {
+    await pgRun(`INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`, lead.id, email, subject, 'error', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Email Template ────────────────────────────────────────────────────────────
 app.get('/api/template', requireAuth, async (req, res) => {
   const t = await pgGet('SELECT * FROM email_template WHERE id = 1');
