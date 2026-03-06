@@ -89,10 +89,18 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  // Reset all filter dropdowns — browser may restore stale values from cache
+  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const searchEl = document.getElementById('search-box');
+  if (searchEl) searchEl.value = '';
+  state.filters = {};
+
   await loadFilterOptions();
   await loadStats();
-  setupFilters();   // Bug 1 fix: attach listeners BEFORE first loadLeads()
-  collectFilters(); // ensure state.filters is populated from current DOM values
+  setupFilters();
   await loadLeads();
 }
 
