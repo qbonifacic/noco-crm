@@ -215,11 +215,18 @@ async function seedLeads() {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
+// Trust Cloudflare proxy so secure cookies work over HTTPS
+app.set('trust proxy', 1);
+
 app.use(session({
   secret: process.env.SESSION_SECRET || 'wolfpack2026secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, maxAge: 86400000 * 7 }
+  cookie: {
+    secure: 'auto',   // secure when behind HTTPS proxy, plain when localhost
+    sameSite: 'lax',
+    maxAge: 86400000 * 7
+  }
 }));
 
 const requireAuth = (req, res, next) => {
