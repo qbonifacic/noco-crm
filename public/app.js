@@ -585,19 +585,16 @@ $('refresh-logs').addEventListener('click', loadLogs);
 // ── Sticky Header Offset (Bug 1) ──────────────────────────────────────────────
 function updateStickyOffset() {
   requestAnimationFrame(() => {
-    const navbar = document.querySelector('.navbar');
-    const statsBar = document.getElementById('stats-bar');
-    const filtersBar = document.querySelector('.filters-bar');
-    const bulkBar = document.getElementById('bulk-bar');
-
-    let offset = 0;
-    if (navbar) offset += navbar.getBoundingClientRect().height;
-    if (statsBar) offset += statsBar.getBoundingClientRect().height;
-    if (filtersBar) offset += filtersBar.getBoundingClientRect().height;
-    if (bulkBar && bulkBar.style.display !== 'none') offset += bulkBar.getBoundingClientRect().height;
-
-    document.querySelectorAll('.leads-table th').forEach(th => {
-      th.style.top = Math.round(offset) + 'px';
+    requestAnimationFrame(() => {
+      // Use the bottom of the last sticky bar above the table
+      const bulkBar = document.getElementById('bulk-bar');
+      const filtersBar = document.querySelector('.filters-bar');
+      let lastBar = (bulkBar && bulkBar.style.display !== 'none') ? bulkBar : filtersBar;
+      if (!lastBar) return;
+      const bottom = Math.round(lastBar.getBoundingClientRect().bottom);
+      document.querySelectorAll('.leads-table th').forEach(th => {
+        th.style.top = bottom + 'px';
+      });
     });
   });
 }
