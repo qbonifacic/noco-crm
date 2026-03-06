@@ -584,19 +584,7 @@ $('refresh-logs').addEventListener('click', loadLogs);
 
 // ── Sticky Header Offset (Bug 1) ──────────────────────────────────────────────
 function updateStickyOffset() {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      // Use the bottom of the last sticky bar above the table
-      const bulkBar = document.getElementById('bulk-bar');
-      const filtersBar = document.querySelector('.filters-bar');
-      let lastBar = (bulkBar && bulkBar.style.display !== 'none') ? bulkBar : filtersBar;
-      if (!lastBar) return;
-      const bottom = Math.round(lastBar.getBoundingClientRect().bottom);
-      document.querySelectorAll('.leads-table th').forEach(th => {
-        th.style.top = bottom + 'px';
-      });
-    });
-  });
+  // Pure CSS sticky — nothing to do here
 }
 
 window.addEventListener('resize', updateStickyOffset);
