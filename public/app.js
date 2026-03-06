@@ -173,6 +173,7 @@ async function loadLeads() {
   renderTable(data.rows);
   renderPagination(data.total, data.page, data.limit);
   updateBulkBar();
+  updateStickyOffset();
 }
 
 function renderTable(rows) {
@@ -223,16 +224,22 @@ function renderTable(rows) {
     });
   });
 
-  // Quick action buttons
+  // Quick action buttons — toggle: clicking same status reverts to untouched
   tbody.querySelectorAll('[data-action]').forEach(btn => {
     btn.addEventListener('click', async e => {
       e.stopPropagation();
       const id = btn.dataset.id;
       const action = btn.dataset.action;
-      await api('PATCH', `/api/leads/${id}`, { status: action });
+      const row = btn.closest('tr');
+      const currentBadge = row.querySelector('.badge');
+      const currentStatus = currentBadge ? currentBadge.textContent.trim() : 'untouched';
+      const newStatus = currentStatus === action ? 'untouched' : action;
+      await api('PATCH', `/api/leads/${id}`, { status: newStatus });
       loadLeads(); loadStats();
     });
   });
+
+  updateStickyOffset();
 }
 
 // Sortable columns
@@ -383,6 +390,7 @@ function renderDetail(lead) {
     ${field('Address', lead.address)}
     ${field('Phone', lead.phone ? `<a href="tel:${lead.phone}">${lead.phone}</a>` : '—', true)}
     ${field('Email', lead.email ? `<a href="mailto:${lead.email}">${lead.email}</a>` : '—', true)}
+    ${lead.contacts && lead.contacts !== '[]' && lead.contacts !== '' ? renderContacts(lead.contacts) : ''}
     ${field('Website', lead.website ? `<a href="${lead.website}" target="_blank" rel="noopener">${lead.website}</a>` : '—', true)}
     ${field('Yelp', lead.yelp_url ? `<a href="${lead.yelp_url}" target="_blank" rel="noopener">View →</a>` : '—', true)}
     ${field('Owner', lead.owner_name)}
@@ -565,6 +573,50 @@ async function loadLogs() {
 }
 
 $('refresh-logs').addEventListener('click', loadLogs);
+
+// ── Sticky Header Offset (Bug 1) ──────────────────────────────────────────────
+function updateStickyOffset() {
+  const navbar = document.querySelector('.navbar');
+  const statsBar = document.getElementById('stats-bar');
+  const filtersBar = document.querySelector('.filters-bar');
+  const bulkBar = document.getElementById('bulk-bar');
+
+  let offset = 0;
+  if (navbar) offset += navbar.offsetHeight;
+  if (statsBar) offset += statsBar.offsetHeight;
+  if (filtersBar) offset += filtersBar.offsetHeight;
+  if (bulkBar && bulkBar.style.display !== 'none') offset += bulkBar.offsetHeight;
+
+  document.querySelectorAll('.leads-table th').forEach(th => {
+    th.style.top = offset + 'px';
+  });
+}
+
+window.addEventListener('resize', updateStickyOffset);
+
+// ── Hunter.io Contacts (Bug 3) ────────────────────────────────────────────────
+function renderContacts(contactsJson) {
+  try {
+    const contacts = JSON.parse(contactsJson);
+    if (!contacts.length) return '';
+    return `<div class="detail-field">
+      <label>Hunter.io Contacts</label>
+      <div class="contacts-list">
+        ${contacts.map(c => `<div class="contact-item">
+          <span class="contact-email">${esc(c.email)}</span>
+          ${c.name ? `<span class="contact-name">${esc(c.name)}</span>` : ''}
+          ${c.role ? `<span class="contact-role text-dim">${esc(c.role)}</span>` : ''}
+          <button class="btn btn-sm btn-ghost" onclick="copyEmail('${esc(c.email)}')">Copy</button>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  } catch { return ''; }
+}
+
+function copyEmail(email) {
+  navigator.clipboard.writeText(email).then(() => notify('Copied!'));
+}
+window.copyEmail = copyEmail;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 checkAuth();
