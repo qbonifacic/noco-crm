@@ -277,7 +277,7 @@ app.get('/api/leads', requireAuth, async (req, res) => {
   const {
     page = 1, limit = 50, sort = 'id', dir = 'asc',
     city, segment, status, min_rating, has_email, has_phone, has_website,
-    search, export: doExport
+    min_contacts, search, export: doExport
   } = req.query;
 
   const allowed_sorts = ['id','business_name','segment','city','google_rating','google_review_count','yelp_rating','status','email_sent'];
@@ -298,6 +298,13 @@ app.get('/api/leads', requireAuth, async (req, res) => {
   if (has_phone === 'no') conditions.push("(phone IS NULL OR phone = '')");
   if (has_website === 'yes') conditions.push("website != ''");
   if (has_website === 'no') conditions.push("(website IS NULL OR website = '')");
+  if (min_contacts) {
+    const mc = parseInt(min_contacts);
+    if (!isNaN(mc) && mc > 0) {
+      conditions.push(`jsonb_array_length(CASE WHEN contacts IS NOT NULL AND contacts != '' AND contacts != '[]' THEN contacts::jsonb ELSE '[]'::jsonb END) >= $${paramIdx++}`);
+      params.push(mc);
+    }
+  }
   if (search) {
     conditions.push(`(business_name ILIKE $${paramIdx} OR city ILIKE $${paramIdx+1} OR address ILIKE $${paramIdx+2})`);
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);

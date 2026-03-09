@@ -90,7 +90,7 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   // Reset all filter dropdowns — browser may restore stale values from cache
-  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website'].forEach(id => {
+  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -128,7 +128,7 @@ async function loadFilterOptions() {
 // ── Filters ───────────────────────────────────────────────────────────────────
 let searchDebounce;
 function setupFilters() {
-  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website'].forEach(id => {
+  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => {
     $(id).addEventListener('change', () => { state.page = 1; collectFilters(); loadLeads(); });
   });
   $('search-box').addEventListener('input', () => {
@@ -136,7 +136,7 @@ function setupFilters() {
     searchDebounce = setTimeout(() => { state.page = 1; collectFilters(); loadLeads(); }, 350);
   });
   $('reset-filters').addEventListener('click', () => {
-    ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website'].forEach(id => $(id).value = '');
+    ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => $(id).value = '');
     $('search-box').value = '';
     state.filters = {};
     state.page = 1;
@@ -166,6 +166,7 @@ function collectFilters() {
   const email = $('f-email').value; if (email) state.filters.has_email = email;
   const phone = $('f-phone').value; if (phone) state.filters.has_phone = phone;
   const website = $('f-website').value; if (website) state.filters.has_website = website;
+  const contacts = $('f-contacts').value; if (contacts) state.filters.min_contacts = contacts;
   const search = $('search-box').value.trim(); if (search) state.filters.search = search;
 }
 
