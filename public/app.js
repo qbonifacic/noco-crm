@@ -90,7 +90,7 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   // Reset all filter dropdowns — browser may restore stale values from cache
-  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website'].forEach(id => {
+  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -128,7 +128,7 @@ async function loadFilterOptions() {
 // ── Filters ───────────────────────────────────────────────────────────────────
 let searchDebounce;
 function setupFilters() {
-  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website'].forEach(id => {
+  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => {
     $(id).addEventListener('change', () => { state.page = 1; collectFilters(); loadLeads(); });
   });
   $('search-box').addEventListener('input', () => {
@@ -136,7 +136,7 @@ function setupFilters() {
     searchDebounce = setTimeout(() => { state.page = 1; collectFilters(); loadLeads(); }, 350);
   });
   $('reset-filters').addEventListener('click', () => {
-    ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-min-contacts'].forEach(id => $(id).value = '');
+    ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => $(id).value = '');
     $('search-box').value = '';
     state.filters = {};
     state.page = 1;
@@ -164,7 +164,7 @@ function collectFilters() {
   const status = $('f-status').value; if (status) state.filters.status = status;
   const rating = $('f-rating').value; if (rating) state.filters.min_rating = rating;
   const email = $('f-email').value; if (email) state.filters.has_email = email;
-  const mc = $('f-min-contacts').value; if (mc) state.filters.min_contacts = mc;
+  const mc = $('f-contacts').value; if (mc) state.filters.min_contacts = mc;
   const phone = $('f-phone').value; if (phone) state.filters.has_phone = phone;
   const website = $('f-website').value; if (website) state.filters.has_website = website;
   const search = $('search-box').value.trim(); if (search) state.filters.search = search;

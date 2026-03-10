@@ -337,13 +337,6 @@ app.get('/api/leads', requireAuth, async (req, res) => {
       params.push(mc);
     }
   }
-  if (min_contacts) {
-    const mc = parseInt(min_contacts);
-    if (!isNaN(mc) && mc > 0) {
-      conditions.push();
-      params.push(mc);
-    }
-  }
   if (search) {
     conditions.push(`(business_name ILIKE $${paramIdx} OR city ILIKE $${paramIdx+1} OR address ILIKE $${paramIdx+2})`);
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
