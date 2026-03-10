@@ -261,14 +261,45 @@ app.get('/api/me', (req, res) => {
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 app.get('/api/stats', requireAuth, async (req, res) => {
+  const { city, segment, min_rating, has_email, has_phone, has_website, min_contacts, search } = req.query;
+
+  const conditions = [];
+  const params = [];
+  let paramIdx = 1;
+
+  if (city) { conditions.push(`city = $${paramIdx++}`); params.push(city); }
+  if (segment) { conditions.push(`segment = $${paramIdx++}`); params.push(segment); }
+  if (min_rating) { conditions.push(`google_rating >= $${paramIdx++}`); params.push(parseFloat(min_rating)); }
+  if (has_email === 'yes') conditions.push("email != ''");
+  if (has_email === 'no') conditions.push("(email IS NULL OR email = '')");
+  if (has_phone === 'yes') conditions.push("phone != ''");
+  if (has_phone === 'no') conditions.push("(phone IS NULL OR phone = '')");
+  if (has_website === 'yes') conditions.push("website != ''");
+  if (has_website === 'no') conditions.push("(website IS NULL OR website = '')");
+  if (min_contacts) {
+    const mc = parseInt(min_contacts);
+    if (!isNaN(mc) && mc > 0) {
+      conditions.push(`jsonb_array_length(CASE WHEN contacts IS NOT NULL AND contacts != '' AND contacts != '[]' THEN contacts::jsonb ELSE '[]'::jsonb END) >= $${paramIdx++}`);
+      params.push(mc);
+    }
+  }
+  if (search) {
+    conditions.push(`(business_name ILIKE $${paramIdx} OR city ILIKE $${paramIdx+1} OR address ILIKE $${paramIdx+2})`);
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    paramIdx += 3;
+  }
+
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+  const statusWhere = conditions.length ? ' AND ' + conditions.join(' AND ') : '';
+
   res.json({
-    total: parseInt((await pgGet('SELECT COUNT(*) as n FROM leads')).n),
-    pursuing: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='pursue'")).n),
-    hidden: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='hide'")).n),
-    maybe: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='maybe'")).n),
-    untouched: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE status='untouched'")).n),
-    emails_sent: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE email_sent=1")).n),
-    has_email: parseInt((await pgGet("SELECT COUNT(*) as n FROM leads WHERE email != ''")).n),
+    total: parseInt((await pool.query(`SELECT COUNT(*) as n FROM leads ${where}`, params)).rows[0].n),
+    pursuing: parseInt((await pool.query(`SELECT COUNT(*) as n FROM leads WHERE status='pursue'${statusWhere}`, params)).rows[0].n),
+    hidden: parseInt((await pool.query(`SELECT COUNT(*) as n FROM leads WHERE status='hide'${statusWhere}`, params)).rows[0].n),
+    maybe: parseInt((await pool.query(`SELECT COUNT(*) as n FROM leads WHERE status='maybe'${statusWhere}`, params)).rows[0].n),
+    untouched: parseInt((await pool.query(`SELECT COUNT(*) as n FROM leads WHERE status='untouched'${statusWhere}`, params)).rows[0].n),
+    emails_sent: parseInt((await pool.query(`SELECT COUNT(*) as n FROM leads WHERE email_sent=1${statusWhere}`, params)).rows[0].n),
+    has_email: parseInt((await pool.query(`SELECT COUNT(*) as n FROM leads WHERE email != ''${statusWhere}`, params)).rows[0].n),
   });
 });
 
