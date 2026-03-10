@@ -106,7 +106,7 @@ async function init() {
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 async function loadStats() {
-  const s = await api('GET', '/api/stats');
+  const s = await api('GET', '/api/stats' + buildQuery());
   $('s-total').textContent = s.total;
   $('s-pursuing').textContent = s.pursuing;
   $('s-maybe').textContent = s.maybe;
@@ -183,6 +183,7 @@ async function loadLeads() {
   renderPagination(data.total, data.page, data.limit);
   updateBulkBar();
   updateStickyOffset();
+  loadStats();
 }
 
 function renderTable(rows) {
@@ -399,7 +400,7 @@ function renderDetail(lead) {
     ${field('Address', lead.address)}
     ${field('Phone', lead.phone ? `<a href="tel:${lead.phone}">${lead.phone}</a>` : '—', true)}
     ${field('Email', lead.email ? `<a href="mailto:${lead.email}">${lead.email}</a>` : '—', true)}
-    ${lead.contacts && lead.contacts !== '[]' && lead.contacts !== '' ? renderContacts(lead.contacts) : ''}
+    ${lead.contacts && lead.contacts !== '[]' && lead.contacts !== '' ? renderContacts(lead.contacts, lead.id) : ''}
     ${field('Website', lead.website ? `<a href="${lead.website}" target="_blank" rel="noopener">${lead.website}</a>` : '—', true)}
     ${field('Yelp', lead.yelp_url ? `<a href="${lead.yelp_url}" target="_blank" rel="noopener">View →</a>` : '—', true)}
     ${field('Owner', lead.owner_name)}
@@ -591,7 +592,7 @@ function updateStickyOffset() {
 window.addEventListener('resize', updateStickyOffset);
 
 // ── Hunter.io Contacts (Bug 3) ────────────────────────────────────────────────
-function renderContacts(contactsJson) {
+function renderContacts(contactsJson, leadId) {
   try {
     const contacts = JSON.parse(contactsJson);
     if (!contacts.length) return '';
@@ -606,7 +607,7 @@ function renderContacts(contactsJson) {
           </div>
           <div class="contact-actions">
             <button class="btn btn-sm btn-ghost" onclick="copyEmail('${esc(c.email)}')">Copy</button>
-            <button class="btn btn-sm btn-primary" onclick="sendToContact(${lead.id},'${esc(c.email)}','${esc(c.name)}')">📧 Send</button>
+            <button class="btn btn-sm btn-primary" onclick="sendToContact(${leadId},'${esc(c.email)}','${esc(c.name)}')">📧 Send</button>
           </div>
         </div>`).join('')}
       </div>
