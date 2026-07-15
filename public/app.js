@@ -14,9 +14,36 @@ const state = {
   saveTimer: null,
 };
 
+const FILTER_IDS = [
+  'f-city', 'f-segment', 'f-status', 'f-rating', 'f-email',
+  'f-phone', 'f-website', 'f-contacts', 'f-min-client', 'f-min-target',
+];
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const esc = s => (s == null ? '' : String(s));
+const esc = s => (s == null ? '' : String(s)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;'));
+
+function hasValue(v) {
+  return v != null && String(v).trim() !== '' && String(v).trim() !== '[]';
+}
+
+function scoreNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function websiteHref(url) {
+  if (!url) return '';
+  const s = String(url).trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  return 'https://' + s;
+}
 
 async function api(method, url, body) {
   const opts = { method, headers: {} };
@@ -90,7 +117,7 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   // Reset all filter dropdowns — browser may restore stale values from cache
-  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => {
+  FILTER_IDS.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -106,14 +133,18 @@ async function init() {
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 async function loadStats() {
-  const s = await api('GET', '/api/stats' + buildQuery());
-  $('s-total').textContent = s.total;
-  $('s-pursuing').textContent = s.pursuing;
-  $('s-maybe').textContent = s.maybe;
-  $('s-hidden').textContent = s.hidden;
-  $('s-untouched').textContent = s.untouched;
-  $('s-emailed').textContent = s.emails_sent;
-  $('s-has-email').textContent = s.has_email;
+  try {
+    const s = await api('GET', '/api/stats' + buildQuery());
+    $('s-total').textContent = s.total;
+    $('s-pursuing').textContent = s.pursuing;
+    $('s-maybe').textContent = s.maybe;
+    $('s-hidden').textContent = s.hidden;
+    $('s-untouched').textContent = s.untouched;
+    $('s-emailed').textContent = s.emails_sent;
+    $('s-has-email').textContent = s.has_email;
+  } catch (err) {
+    console.warn('stats load failed', err);
+  }
 }
 
 // ── Filter Options ────────────────────────────────────────────────────────────
@@ -128,15 +159,16 @@ async function loadFilterOptions() {
 // ── Filters ───────────────────────────────────────────────────────────────────
 let searchDebounce;
 function setupFilters() {
-  ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => {
-    $(id).addEventListener('change', () => { state.page = 1; collectFilters(); loadLeads(); });
+  FILTER_IDS.forEach(id => {
+    const el = $(id);
+    if (el) el.addEventListener('change', () => { state.page = 1; collectFilters(); loadLeads(); });
   });
   $('search-box').addEventListener('input', () => {
     clearTimeout(searchDebounce);
     searchDebounce = setTimeout(() => { state.page = 1; collectFilters(); loadLeads(); }, 350);
   });
   $('reset-filters').addEventListener('click', () => {
-    ['f-city','f-segment','f-status','f-rating','f-email','f-phone','f-website','f-contacts'].forEach(id => $(id).value = '');
+    FILTER_IDS.forEach(id => { const el = $(id); if (el) el.value = ''; });
     $('search-box').value = '';
     state.filters = {};
     state.page = 1;
@@ -144,7 +176,6 @@ function setupFilters() {
   });
   $('export-btn').addEventListener('click', exportCSV);
 
-  // Bug 3: Hunter.io enrichment button
   $('enrich-btn').addEventListener('click', async () => {
     notify('Running Hunter.io enrichment…', true);
     try {
@@ -164,9 +195,14 @@ function collectFilters() {
   const status = $('f-status').value; if (status) state.filters.status = status;
   const rating = $('f-rating').value; if (rating) state.filters.min_rating = rating;
   const email = $('f-email').value; if (email) state.filters.has_email = email;
-  const mc = $('f-contacts').value; if (mc) state.filters.min_contacts = mc;
   const phone = $('f-phone').value; if (phone) state.filters.has_phone = phone;
   const website = $('f-website').value; if (website) state.filters.has_website = website;
+  const mc = $('f-contacts').value; if (mc) state.filters.min_contacts = mc;
+  // Optional score filters — backend may ignore until supported
+  const minClient = $('f-min-client') ? $('f-min-client').value : '';
+  if (minClient) state.filters.min_client = minClient;
+  const minTarget = $('f-min-target') ? $('f-min-target').value : '';
+  if (minTarget) state.filters.min_target = minTarget;
   const search = $('search-box').value.trim(); if (search) state.filters.search = search;
 }
 
@@ -186,11 +222,25 @@ async function loadLeads() {
   loadStats();
 }
 
+function scoreBadgesHtml(lead) {
+  const client = scoreNum(lead.fit_client_score);
+  const target = scoreNum(lead.fit_target_score);
+  const parts = [];
+  if (client) {
+    parts.push(`<span class="badge badge-score-client" title="Client fit (AI sales / services)">${client}</span>`);
+  }
+  if (target) {
+    parts.push(`<span class="badge badge-score-target" title="Target fit (search fund / acquisition)">${target}</span>`);
+  }
+  if (!parts.length) return '<span class="text-dim">—</span>';
+  return `<div class="score-cell">${parts.join(' ')}</div>`;
+}
+
 function renderTable(rows) {
   const tbody = $('leads-tbody');
   tbody.innerHTML = '';
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-dim)">No leads found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--text-dim)">No leads found</td></tr>';
     return;
   }
   rows.forEach(lead => {
@@ -199,16 +249,27 @@ function renderTable(rows) {
     tr.dataset.id = lead.id;
     tr.dataset.status = lead.status || 'untouched';
     const checked = state.selected.has(lead.id) ? 'checked' : '';
+
+    const phoneCell = hasValue(lead.phone)
+      ? `<a href="tel:${esc(lead.phone)}" onclick="event.stopPropagation()">${esc(lead.phone)}</a>${scoreNum(lead.phone_confidence) ? ` <span class="phone-conf" title="phone confidence">${Math.round(lead.phone_confidence * 100)}%</span>` : ''}`
+      : '<span class="text-dim">—</span>';
+
+    const href = websiteHref(lead.website);
+    const websiteCell = href
+      ? `<a class="truncate-sm" href="${esc(href)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="${esc(lead.website)}">${esc(lead.website.replace(/^https?:\/\//i, ''))}</a>`
+      : '<span class="text-dim">—</span>';
+
     tr.innerHTML = `
       <td onclick="event.stopPropagation()"><input type="checkbox" class="row-check" data-id="${lead.id}" ${checked}></td>
-      <td class="truncate">${esc(lead.business_name)}</td>
+      <td class="truncate" title="${esc(lead.business_name)}">${esc(lead.business_name)}</td>
       <td>${esc(lead.segment)}</td>
       <td>${esc(lead.city)}</td>
-      <td class="text-dim">${esc(lead.phone)}</td>
-      <td>${lead.email ? `<span title="${esc(lead.email)}">✉</span>${lead.email_sent ? ' <span class="emailed-dot" title="Email sent"></span>' : ''}` : '<span class="text-dim">—</span>'}</td>
+      <td>${phoneCell}</td>
+      <td>${websiteCell}</td>
+      <td>${hasValue(lead.email) ? `<span title="${esc(lead.email)}">✉</span>${lead.email_sent ? ' <span class="emailed-dot" title="Email sent"></span>' : ''}` : '<span class="text-dim">—</span>'}</td>
       <td>${lead.contact_count > 0 ? `<span class="contact-badge" title="${lead.contact_count} Hunter contacts">👥 ${lead.contact_count}</span>` : '<span class="text-dim">—</span>'}</td>
       <td>${lead.google_rating ? `<b>${lead.google_rating}</b>` : '<span class="text-dim">—</span>'}</td>
-      <td class="text-dim">${lead.google_review_count || '—'}</td>
+      <td>${scoreBadgesHtml(lead)}</td>
       <td><span class="badge badge-${lead.status || 'untouched'}">${lead.status || 'untouched'}</span></td>
       <td onclick="event.stopPropagation()">
         <div class="action-btns">
@@ -219,16 +280,15 @@ function renderTable(rows) {
       </td>
     `;
     tr.addEventListener('click', e => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT') return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT' || e.target.tagName === 'A') return;
       openDetail(lead.id);
     });
     tbody.appendChild(tr);
   });
 
-  // Row checkboxes
   tbody.querySelectorAll('.row-check').forEach(cb => {
     cb.addEventListener('change', e => {
-      const id = parseInt(e.target.dataset.id);
+      const id = parseInt(e.target.dataset.id, 10);
       if (e.target.checked) state.selected.add(id);
       else state.selected.delete(id);
       updateBulkBar();
@@ -269,7 +329,7 @@ $('select-all').addEventListener('change', e => {
   const checks = document.querySelectorAll('.row-check');
   checks.forEach(cb => {
     cb.checked = e.target.checked;
-    const id = parseInt(cb.dataset.id);
+    const id = parseInt(cb.dataset.id, 10);
     if (e.target.checked) state.selected.add(id);
     else state.selected.delete(id);
   });
@@ -306,7 +366,7 @@ $('bulk-apply').addEventListener('click', async () => {
 
 $('bulk-clear').addEventListener('click', () => {
   state.selected.clear();
-  document.querySelectorAll('.row-check').forEach(cb => cb.checked = false);
+  document.querySelectorAll('.row-check').forEach(cb => { cb.checked = false; });
   $('select-all').checked = false;
   updateBulkBar();
 });
@@ -323,7 +383,15 @@ function renderPagination(total, page, limit) {
   const el = $('pagination');
   el.innerHTML = '';
   const pages = Math.ceil(total / limit);
-  if (pages <= 1) return;
+  if (pages <= 1) {
+    if (total > 0) {
+      const info = document.createElement('span');
+      info.className = 'page-info';
+      info.textContent = `${total} leads`;
+      el.appendChild(info);
+    }
+    return;
+  }
 
   const info = document.createElement('span');
   info.className = 'page-info';
@@ -341,7 +409,6 @@ function renderPagination(total, page, limit) {
   next.disabled = page === pages;
   next.addEventListener('click', () => { state.page++; loadLeads(); });
 
-  // Page number buttons (show up to 7)
   const pageNums = document.createElement('div');
   pageNums.style.display = 'flex'; pageNums.style.gap = '4px';
   let start = Math.max(1, page - 3), end = Math.min(pages, start + 6);
@@ -383,28 +450,75 @@ function closeDetail() {
 $('detail-close').addEventListener('click', closeDetail);
 $('detail-overlay').addEventListener('click', closeDetail);
 
+function researchBlockHtml(lead) {
+  if (!hasValue(lead.research_summary)) return '';
+  const rec = hasValue(lead.recommended_action)
+    ? `<div class="research-rec">Recommended: <b>${esc(lead.recommended_action)}</b></div>`
+    : '';
+  return `<details class="research-block" open>
+    <summary>Research summary</summary>
+    <div class="research-body">${esc(lead.research_summary)}</div>
+    ${rec}
+  </details>`;
+}
+
+function contactBlockHtml(lead) {
+  const phone = hasValue(lead.phone)
+    ? `<a href="tel:${esc(lead.phone)}">${esc(lead.phone)}</a>${scoreNum(lead.phone_confidence) ? ` <span class="phone-conf">(${Math.round(lead.phone_confidence * 100)}% conf)</span>` : ''}`
+    : '<span class="empty-state">No phone</span>';
+  const email = hasValue(lead.email)
+    ? `<a href="mailto:${esc(lead.email)}">${esc(lead.email)}</a>`
+    : '<span class="empty-state">No email</span>';
+  const website = hasValue(lead.website)
+    ? `<a href="${esc(websiteHref(lead.website))}" target="_blank" rel="noopener">${esc(lead.website)}</a>`
+    : '<span class="empty-state">No website</span>';
+  const owner = hasValue(lead.owner_name)
+    ? esc(lead.owner_name)
+    : '<span class="empty-state">No owner</span>';
+
+  return `<div class="contact-block">
+    <label>Contact</label>
+    <div class="contact-primary">
+      <div class="contact-primary-row"><span class="ckey">Phone</span><span>${phone}</span></div>
+      <div class="contact-primary-row"><span class="ckey">Email</span><span>${email}</span></div>
+      <div class="contact-primary-row"><span class="ckey">Web</span><span>${website}</span></div>
+      <div class="contact-primary-row"><span class="ckey">Owner</span><span>${owner}</span></div>
+    </div>
+    ${renderContacts(lead.contacts, lead.id)}
+  </div>`;
+}
+
 function renderDetail(lead) {
   $('detail-title').textContent = lead.business_name || 'Lead Detail';
   const body = $('detail-body');
+
+  const client = scoreNum(lead.fit_client_score);
+  const target = scoreNum(lead.fit_target_score);
+  const clientBadge = client
+    ? `<span class="badge badge-score-client" title="client fit (AI sales)">${client}</span>`
+    : '';
+  const targetBadge = target
+    ? `<span class="badge badge-score-target" title="target fit (search fund)">${target}</span>`
+    : '';
+
   body.innerHTML = `
     <div class="detail-status-row">
-      <button class="btn btn-pursue btn-sm" onclick="quickStatus('pursue')">✓ Pursue</button>
-      <button class="btn btn-maybe btn-sm" onclick="quickStatus('maybe')">? Maybe</button>
-      <button class="btn btn-hide btn-sm" onclick="quickStatus('hide')">✗ Hide</button>
+      <button class="btn btn-pursue btn-sm" data-qstatus="pursue">✓ Pursue</button>
+      <button class="btn btn-maybe btn-sm" data-qstatus="maybe">? Maybe</button>
+      <button class="btn btn-hide btn-sm" data-qstatus="hide">✗ Hide</button>
       <span id="detail-status-badge" class="badge badge-${lead.status || 'untouched'}">${lead.status || 'untouched'}</span>
+      <span style="margin-left:8px">${clientBadge} ${targetBadge}</span>
     </div>
     <div class="detail-sep"></div>
+
+    ${researchBlockHtml(lead)}
+    ${contactBlockHtml(lead)}
 
     ${field('Business', lead.business_name)}
     ${field('Segment', lead.segment)}
     ${field('City', lead.city)}
     ${field('Address', lead.address)}
-    ${field('Phone', lead.phone ? `<a href="tel:${lead.phone}">${lead.phone}</a>` : '—', true)}
-    ${field('Email', lead.email ? `<a href="mailto:${lead.email}">${lead.email}</a>` : '—', true)}
-    ${lead.contacts && lead.contacts !== '[]' && lead.contacts !== '' ? renderContacts(lead.contacts, lead.id) : ''}
-    ${field('Website', lead.website ? `<a href="${lead.website}" target="_blank" rel="noopener">${lead.website}</a>` : '—', true)}
-    ${field('Yelp', lead.yelp_url ? `<a href="${lead.yelp_url}" target="_blank" rel="noopener">View →</a>` : '—', true)}
-    ${field('Owner', lead.owner_name)}
+    ${field('Yelp', lead.yelp_url ? `<a href="${esc(lead.yelp_url)}" target="_blank" rel="noopener">View →</a>` : '—', true)}
     ${field('Google Rating', lead.google_rating ? `${lead.google_rating} ★ (${lead.google_review_count || 0} reviews)` : '—')}
     ${field('Yelp Rating', lead.yelp_rating ? `${lead.yelp_rating} ★ (${lead.yelp_review_count || 0} reviews)` : '—')}
     ${field('Years in Business', lead.years_in_business)}
@@ -435,15 +549,107 @@ function renderDetail(lead) {
 
     <div class="detail-sep"></div>
 
+    <!-- CALL_LOG_SECTION -->
+    <div id="log-call" class="call-log-section">
+      <label>Log Call</label>
+      <div class="call-log-form">
+        <input id="call-duration" type="number" min="0" placeholder="min" value="5" title="Duration (minutes)">
+        <select id="call-outcome" class="filter-select" style="width:auto">
+          <option value="callback">callback</option>
+          <option value="qualified">qualified</option>
+          <option value="not_interested">not interested</option>
+          <option value="no_answer">no answer</option>
+          <option value="other">other</option>
+        </select>
+        <input id="call-transcript" type="text" placeholder="key points / transcript">
+        <button type="button" class="btn btn-primary btn-sm" id="call-log-save-btn">Save Call Log</button>
+      </div>
+      <div id="call-history" class="call-history">
+        <label>Call History</label>
+        <div id="call-history-list" class="call-history-list">Loading…</div>
+      </div>
+    </div>
+    <!-- /CALL_LOG_SECTION -->
+
+    <div class="detail-sep"></div>
+
     <div class="detail-actions">
-      <button class="btn btn-primary" onclick="saveDetail()">💾 Save</button>
-      <button class="btn btn-warning" onclick="sendEmailDetail()" ${!lead.email ? 'disabled title="No email address"' : ''}>📧 Send Email</button>
+      <button class="btn btn-primary" id="detail-save-btn">💾 Save</button>
+      <button class="btn btn-warning" id="detail-send-btn" ${!hasValue(lead.email) ? 'disabled title="No email address"' : ''}>📧 Send Email</button>
       <span id="detail-save-ok" class="detail-save-ok hidden">✓ Saved</span>
     </div>
   `;
 
-  // Auto-save on notes change
+  // Status buttons
+  body.querySelectorAll('[data-qstatus]').forEach(btn => {
+    btn.addEventListener('click', () => quickStatus(btn.dataset.qstatus));
+  });
+
   $('detail-notes').addEventListener('input', debounceSave);
+  $('detail-save-btn').addEventListener('click', saveDetail);
+  $('detail-send-btn').addEventListener('click', sendEmailDetail);
+
+  const callSave = $('call-log-save-btn');
+  if (callSave) callSave.addEventListener('click', saveCallLog);
+
+  // Hunter contact action buttons (data attributes — no inline JS with unescaped email)
+  body.querySelectorAll('[data-copy-email]').forEach(btn => {
+    btn.addEventListener('click', () => copyEmail(btn.dataset.copyEmail));
+  });
+  body.querySelectorAll('[data-send-email]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      sendToContact(
+        parseInt(btn.dataset.sendLead, 10),
+        btn.dataset.sendEmail,
+        btn.dataset.sendName || ''
+      );
+    });
+  });
+
+  loadCallHistory(lead.id);
+}
+
+async function loadCallHistory(leadId) {
+  try {
+    const data = await api('GET', `/api/call-logs?lead_id=${leadId}&limit=10`);
+    const el = $('call-history-list');
+    if (!el) return;
+    if (!data.rows || !data.rows.length) {
+      el.innerHTML = '<span class="empty-state">No calls logged yet.</span>';
+      return;
+    }
+    el.innerHTML = data.rows.map(c => {
+      const d = c.created_at ? String(c.created_at).slice(0, 10) : '';
+      const mins = Math.round((c.duration_seconds || 0) / 60);
+      return `<div class="call-history-item">📞 ${esc(d)} ${mins}min [${esc(c.outcome || '')}] ${esc((c.transcript || '').slice(0, 120))}</div>`;
+    }).join('');
+  } catch {
+    const el = $('call-history-list');
+    if (el) el.innerHTML = '<span class="empty-state">History unavailable (Task 07 may harden this).</span>';
+  }
+}
+
+async function saveCallLog() {
+  const lead = state.currentLead;
+  if (!lead) return;
+  const duration = parseInt(($('call-duration') && $('call-duration').value) || '0', 10) || 0;
+  const outcome = ($('call-outcome') && $('call-outcome').value) || '';
+  const transcript = ($('call-transcript') && $('call-transcript').value) || '';
+  try {
+    await api('POST', `/api/leads/${lead.id}/log-call`, {
+      duration_seconds: duration * 60,
+      transcript,
+      outcome,
+      source: 'manual',
+    });
+    notify('Call logged');
+    const fresh = await api('GET', `/api/leads/${lead.id}`);
+    state.currentLead = fresh;
+    renderDetail(fresh);
+    loadLeads(); loadStats();
+  } catch (err) {
+    notify('Log call failed: ' + err.message, false);
+  }
 }
 
 function field(label, val, raw = false) {
@@ -453,14 +659,16 @@ function field(label, val, raw = false) {
 
 async function quickStatus(status) {
   const lead = state.currentLead;
+  if (!lead) return;
   await api('PATCH', `/api/leads/${lead.id}`, { status });
   state.currentLead.status = status;
-  $('detail-status-badge').className = `badge badge-${status}`;
-  $('detail-status-badge').textContent = status;
+  const badge = $('detail-status-badge');
+  if (badge) {
+    badge.className = `badge badge-${status}`;
+    badge.textContent = status;
+  }
   loadLeads(); loadStats();
 }
-
-window.quickStatus = quickStatus;
 
 function debounceSave() {
   clearTimeout(state.saveTimer);
@@ -484,25 +692,21 @@ async function saveDetail() {
   loadStats();
 }
 
-window.saveDetail = saveDetail;
-
 async function sendEmailDetail() {
   const lead = state.currentLead;
-  if (!lead || !lead.email) return;
+  if (!lead || !hasValue(lead.email)) return;
   if (!confirm(`Send email to ${lead.email}?`)) return;
   try {
     await api('POST', `/api/send-email/${lead.id}`);
     notify('Email sent!');
     state.currentLead.email_sent = 1;
-    $('detail-email-sent').checked = true;
-    $('detail-date-sent').value = new Date().toISOString().slice(0, 10);
+    if ($('detail-email-sent')) $('detail-email-sent').checked = true;
+    if ($('detail-date-sent')) $('detail-date-sent').value = new Date().toISOString().slice(0, 10);
     loadStats();
   } catch (err) {
     notify('Send failed: ' + err.message, false);
   }
 }
-
-window.sendEmailDetail = sendEmailDetail;
 
 // ── Batch Send ────────────────────────────────────────────────────────────────
 async function startBatchSend(ids) {
@@ -518,7 +722,7 @@ async function startBatchSend(ids) {
     $('batch-bar').style.width = '100%';
     $('batch-progress-text').textContent = `Done. ${result.results.filter(r => r.status === 'sent').length} sent.`;
     $('batch-results').innerHTML = result.results.map(r =>
-      `<div class="${r.status === 'sent' ? 'status-sent' : 'status-error'}">${r.status === 'sent' ? '✓' : '✗'} ${r.email || `ID ${r.id}`}: ${r.status}${r.reason ? ' ('+r.reason+')' : ''}${r.error ? ' — '+r.error : ''}</div>`
+      `<div class="${r.status === 'sent' ? 'status-sent' : 'status-error'}">${r.status === 'sent' ? '✓' : '✗'} ${esc(r.email || `ID ${r.id}`)}: ${esc(r.status)}${r.reason ? ' (' + esc(r.reason) + ')' : ''}${r.error ? ' — ' + esc(r.error) : ''}</div>`
     ).join('');
     loadLeads(); loadStats();
   } catch (err) {
@@ -535,6 +739,7 @@ $('batch-close').addEventListener('click', () => {
 });
 
 // ── Email Template ────────────────────────────────────────────────────────────
+// Server merge fields (applyMergeFields): [First Name] [Business Name] [City] [Segment]
 const SAMPLE = { 'First Name': 'John', 'Business Name': 'Acme Plumbing', City: 'Fort Collins', Segment: 'plumber' };
 
 function applyMerge(text) {
@@ -573,11 +778,11 @@ async function loadLogs() {
   }
   tbody.innerHTML = logs.map(l => `
     <tr>
-      <td class="text-dim">${l.sent_at || ''}</td>
+      <td class="text-dim">${esc(l.sent_at || '')}</td>
       <td>${esc(l.business_name || '')}</td>
       <td>${esc(l.recipient)}</td>
       <td class="truncate">${esc(l.subject)}</td>
-      <td class="status-${l.status}">${l.status}</td>
+      <td class="status-${esc(l.status)}">${esc(l.status)}</td>
       <td class="text-dim">${esc(l.error || '')}</td>
     </tr>
   `).join('');
@@ -585,43 +790,55 @@ async function loadLogs() {
 
 $('refresh-logs').addEventListener('click', loadLogs);
 
-// ── Sticky Header Offset (Bug 1) ──────────────────────────────────────────────
+// ── Sticky Header Offset ──────────────────────────────────────────────────────
 function updateStickyOffset() {
   // Pure CSS sticky — nothing to do here
 }
 
 window.addEventListener('resize', updateStickyOffset);
 
-// ── Hunter.io Contacts (Bug 3) ────────────────────────────────────────────────
-function renderContacts(contactsJson, leadId) {
+// ── Hunter.io Contacts ────────────────────────────────────────────────────────
+function renderContacts(contactsRaw, leadId) {
+  let contacts = [];
   try {
-    const contacts = JSON.parse(contactsJson);
-    if (!contacts.length) return '';
-    return `<div class="detail-field">
-      <label>Hunter.io Contacts</label>
-      <div class="contacts-list">
-        ${contacts.map(c => `<div class="contact-item">
+    if (Array.isArray(contactsRaw)) contacts = contactsRaw;
+    else if (hasValue(contactsRaw)) contacts = JSON.parse(contactsRaw);
+  } catch {
+    return '<div class="empty-state">Contacts data unreadable</div>';
+  }
+  if (!contacts.length) {
+    return '<div class="empty-state">No Hunter contacts yet</div>';
+  }
+  return `<div class="detail-field" style="margin:0">
+    <label>Hunter.io Contacts (${contacts.length})</label>
+    <div class="contacts-list">
+      ${contacts.map(c => {
+        const email = c.email || '';
+        const name = c.name || '';
+        const role = c.role || c.position || '';
+        return `<div class="contact-item">
           <div class="contact-info">
-            <span class="contact-email">${esc(c.email)}</span>
-            ${c.name ? `<span class="contact-name">${esc(c.name)}</span>` : ''}
-            ${c.role ? `<span class="contact-role text-dim">${esc(c.role)}</span>` : ''}
+            <span class="contact-email">${esc(email)}</span>
+            ${name ? `<span class="contact-name">${esc(name)}</span>` : ''}
+            ${role ? `<span class="contact-role text-dim">${esc(role)}</span>` : ''}
           </div>
           <div class="contact-actions">
-            <button class="btn btn-sm btn-ghost" onclick="copyEmail('${esc(c.email)}')">Copy</button>
-            <button class="btn btn-sm btn-primary" onclick="sendToContact(${leadId},'${esc(c.email)}','${esc(c.name)}')">📧 Send</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-copy-email="${esc(email)}">Copy</button>
+            <button type="button" class="btn btn-sm btn-primary" data-send-lead="${leadId}" data-send-email="${esc(email)}" data-send-name="${esc(name)}">📧 Send</button>
           </div>
-        </div>`).join('')}
-      </div>
-    </div>`;
-  } catch { return ''; }
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
 }
 
 function copyEmail(email) {
-  navigator.clipboard.writeText(email).then(() => notify('Copied!'));
+  if (!email) return;
+  navigator.clipboard.writeText(email).then(() => notify('Copied!')).catch(() => notify('Copy failed', false));
 }
-window.copyEmail = copyEmail;
 
 async function sendToContact(leadId, email, name) {
+  if (!email) return;
   if (!confirm(`Send email to ${name || email}?`)) return;
   try {
     await api('POST', `/api/send-email-to/${leadId}`, { email, name });
@@ -630,7 +847,6 @@ async function sendToContact(leadId, email, name) {
     notify('Send failed: ' + err.message, false);
   }
 }
-window.sendToContact = sendToContact;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 checkAuth();

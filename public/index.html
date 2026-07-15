@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NoCo AI CRM</title>
-  <link rel="stylesheet" href="/style.css?v=1773178360">
+  <link rel="stylesheet" href="/style.css?v=20260715-1425">
 </head>
 <body>
 
@@ -81,6 +81,19 @@
         <option value="yes">Has Website</option>
         <option value="no">No Website</option>
       </select>
+      <!-- Score filters: UI ready; backend min_client/min_target optional (graceful no-op if ignored) -->
+      <select id="f-min-client" class="filter-select" title="Client fit score (requires API support)">
+        <option value="">Client score: Any</option>
+        <option value="50">50+</option>
+        <option value="60">60+</option>
+        <option value="70">70+</option>
+      </select>
+      <select id="f-min-target" class="filter-select" title="Target fit score (requires API support)">
+        <option value="">Target score: Any</option>
+        <option value="50">50+</option>
+        <option value="60">60+</option>
+        <option value="70">70+</option>
+      </select>
       <select id="f-contacts" class="filter-select">
         <option value="">Contacts: All</option>
         <option value="1">1+ Contacts</option>
@@ -117,10 +130,11 @@
             <th class="sortable" data-col="segment">Segment ↕</th>
             <th class="sortable" data-col="city">City ↕</th>
             <th>Phone</th>
+            <th>Website</th>
             <th>Email</th>
             <th>👥 Contacts</th>
             <th class="sortable" data-col="google_rating">G★ ↕</th>
-            <th class="sortable" data-col="google_review_count">#Rev ↕</th>
+            <th>Scores</th>
             <th class="sortable" data-col="status">Status ↕</th>
             <th>Actions</th>
           </tr>
@@ -138,7 +152,16 @@
     <div class="template-editor">
       <h2>Email Template</h2>
       <div class="merge-hint">
-        Merge fields: <code>[First Name]</code> <code>[Business Name]</code> <code>[City]</code> <code>[Segment]</code>
+        <strong>Merge fields</strong> (match server <code>applyMergeFields</code>):
+        <code>[First Name]</code>
+        <code>[Business Name]</code>
+        <code>[City]</code>
+        <code>[Segment]</code>
+        <br>
+        <span class="merge-hint-note">
+          First Name uses owner name when present, else first word of business name.
+          Bracket syntax only — not <code>{{mustache}}</code>.
+        </span>
       </div>
       <div class="template-form">
         <label>Subject</label>
@@ -201,6 +224,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=1773178360"></script>
+<script src="/app.js?v=20260715-1425"></script>
 </body>
 </html>
