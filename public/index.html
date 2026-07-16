@@ -35,59 +35,50 @@
     <button id="logout-btn" class="btn btn-ghost">Sign Out</button>
   </nav>
 
-  <!-- STATS BAR — hidden on company record -->
+  <!-- STATS BAR — hidden via company-mode CSS on company record -->
   <div class="stats-bar" id="stats-bar">
-    <div class="stat-item stat-click" data-stat="all" title="Clear contact filters"><span class="stat-val" id="s-total">—</span><span class="stat-label">Active</span></div>
-    <div class="stat-item pursuing stat-click" data-stat="pursue"><span class="stat-val" id="s-pursuing">—</span><span class="stat-label">Pursuing</span></div>
-    <div class="stat-item maybe stat-click" data-stat="maybe"><span class="stat-val" id="s-maybe">—</span><span class="stat-label">Maybe</span></div>
-    <div class="stat-item hidden-stat stat-click" data-stat="hide"><span class="stat-val" id="s-hidden">—</span><span class="stat-label">Hidden</span></div>
-    <div class="stat-item untouched stat-click" data-stat="untouched"><span class="stat-val" id="s-untouched">—</span><span class="stat-label">Untouched</span></div>
-    <div class="stat-item emailed stat-click" data-stat="emailed"><span class="stat-val" id="s-emailed">—</span><span class="stat-label">Emailed</span></div>
-    <div class="stat-item has-email stat-click" data-stat="has_email"><span class="stat-val" id="s-has-email">—</span><span class="stat-label">w/ Email</span></div>
-    <div class="stat-item has-phone stat-click" data-stat="has_phone"><span class="stat-val" id="s-has-phone">—</span><span class="stat-label">w/ Phone</span></div>
+    <div class="stat-item" title="Total leads"><span class="stat-val" id="s-total">—</span><span class="stat-label">Total</span></div>
+    <div class="stat-item pursuing"><span class="stat-val" id="s-pursuing">—</span><span class="stat-label">Pursuing</span></div>
+    <div class="stat-item maybe"><span class="stat-val" id="s-maybe">—</span><span class="stat-label">Maybe</span></div>
+    <div class="stat-item hidden-stat"><span class="stat-val" id="s-hidden">—</span><span class="stat-label">Hidden</span></div>
+    <div class="stat-item untouched"><span class="stat-val" id="s-untouched">—</span><span class="stat-label">Untouched</span></div>
+    <div class="stat-item emailed"><span class="stat-val" id="s-emailed">—</span><span class="stat-label">Emailed</span></div>
+    <div class="stat-item has-email"><span class="stat-val" id="s-has-email">—</span><span class="stat-label">w/ Email</span></div>
   </div>
 
   <!-- LEADS TAB -->
   <div id="tab-leads" class="tab-content active">
-    <div class="filters-bar" id="filters-primary">
-      <input type="text" id="search-box" placeholder="🔍 Search name, city, address, website…" class="filter-input search-wide">
-      <select id="f-phone" class="filter-select">
-        <option value="">Phone: All</option>
-        <option value="yes">Has Phone</option>
-        <option value="no">No Phone</option>
+    <div class="filters-bar">
+      <input type="text" id="search-box" placeholder="🔍 Search name, city, address…" class="filter-input search-wide">
+      <select id="f-city" class="filter-select"><option value="">All Cities</option></select>
+      <select id="f-segment" class="filter-select"><option value="">All Segments</option></select>
+      <select id="f-status" class="filter-select">
+        <option value="">All Statuses</option>
+        <option value="untouched">Untouched</option>
+        <option value="pursue">Pursue</option>
+        <option value="maybe">Maybe</option>
+        <option value="hide">Hide</option>
+      </select>
+      <select id="f-rating" class="filter-select">
+        <option value="">Any Rating</option>
+        <option value="4.5">4.5★+</option>
+        <option value="4.8">4.8★+</option>
+        <option value="5">5★ only</option>
       </select>
       <select id="f-email" class="filter-select">
         <option value="">Email: All</option>
         <option value="yes">Has Email</option>
         <option value="no">No Email</option>
       </select>
+      <select id="f-phone" class="filter-select">
+        <option value="">Phone: All</option>
+        <option value="yes">Has Phone</option>
+        <option value="no">No Phone</option>
+      </select>
       <select id="f-website" class="filter-select">
         <option value="">Website: All</option>
         <option value="yes">Has Website</option>
         <option value="no">No Website</option>
-      </select>
-      <select id="f-status" class="filter-select">
-        <option value="">Active (not hidden)</option>
-        <option value="pursue">Pursue</option>
-        <option value="maybe">Maybe</option>
-        <option value="untouched">Untouched</option>
-        <option value="hide">Hide only</option>
-      </select>
-      <select id="f-city" class="filter-select"><option value="">All Cities</option></select>
-      <select id="f-segment" class="filter-select"><option value="">All Segments</option></select>
-      <button type="button" id="filters-more-btn" class="btn btn-ghost">More ▾</button>
-      <button id="reset-filters" class="btn btn-ghost">Reset</button>
-      <button id="export-btn" class="btn btn-ghost">⬇ CSV</button>
-      <button id="enrich-btn" class="btn btn-primary" title="Hunter.io — costs money">🔍 Enrich</button>
-      <span id="view-meta" class="view-meta">—</span>
-    </div>
-
-    <div class="filters-bar filters-more hidden" id="filters-more">
-      <select id="f-rating" class="filter-select">
-        <option value="">Any Rating</option>
-        <option value="4.5">4.5★+</option>
-        <option value="4.8">4.8★+</option>
-        <option value="5">5★ only</option>
       </select>
       <select id="f-contacts" class="filter-select">
         <option value="">Contacts: All</option>
@@ -96,24 +87,10 @@
         <option value="3">3+ Contacts</option>
         <option value="5">5+ Contacts</option>
       </select>
-      <select id="f-min-client" class="filter-select" title="Client fit score">
-        <option value="">Client score: Any</option>
-        <option value="50">50+</option>
-        <option value="60">60+</option>
-        <option value="70">70+</option>
-      </select>
-      <select id="f-min-target" class="filter-select" title="Target fit score">
-        <option value="">Target score: Any</option>
-        <option value="50">50+</option>
-        <option value="60">60+</option>
-        <option value="70">70+</option>
-      </select>
-      <label class="filter-check" title="Show soft-merged duplicate rows">
-        <input type="checkbox" id="f-include-merged"> Include merged dupes
-      </label>
-      <label class="filter-check" title="When status is Active, also include hide">
-        <input type="checkbox" id="f-include-hidden"> Include hidden in “Active”
-      </label>
+      <button id="reset-filters" class="btn btn-ghost">Reset</button>
+      <button id="export-btn" class="btn btn-ghost">⬇ CSV</button>
+      <button id="enrich-btn" class="btn btn-primary" title="Find emails via Hunter.io — costs money">🔍 Enrich Missing Emails</button>
+      <span id="view-meta" class="view-meta">—</span>
     </div>
 
     <div class="bulk-bar" id="bulk-bar" style="display:none">
@@ -154,16 +131,27 @@
     <div class="pagination" id="pagination"></div>
   </div>
 
+  <!-- COMPANY RECORD (Dynamics-style Account form) — hash #/lead/:id -->
+  <div id="company-record" class="company-record hidden" aria-label="Company record">
+    <div class="company-record-inner">
+      <div class="company-toolbar">
+        <button type="button" id="company-back" class="btn btn-ghost">← Back to leads</button>
+        <button type="button" id="company-quick-drawer" class="btn btn-ghost" title="Open slim side drawer">Quick edit</button>
+        <button type="button" id="company-refresh" class="btn btn-ghost" title="Reload company">↻</button>
+        <span id="company-api-banner" class="company-api-banner hidden"></span>
+      </div>
+      <div id="company-body" class="company-body">
+        <div class="empty-state" style="padding:40px;text-align:center">Loading company…</div>
+      </div>
+    </div>
+  </div>
+
   <!-- EMAIL TEMPLATE TAB -->
   <div id="tab-template" class="tab-content hidden">
     <div class="template-editor">
       <h2>Email Template</h2>
       <div class="merge-hint">
-        <strong>Merge fields</strong>:
-        <code>[First Name]</code>
-        <code>[Business Name]</code>
-        <code>[City]</code>
-        <code>[Segment]</code>
+        Available merge fields: <code>[First Name]</code> <code>[Business Name]</code> <code>[City]</code> <code>[Segment]</code>
       </div>
       <div class="template-form">
         <label>Subject</label>
@@ -201,23 +189,9 @@
     </div>
   </div>
 
-  <!-- COMPANY RECORD (Dynamics-style Account form) — hash #/lead/:id -->
-  <div id="company-record" class="company-record hidden">
-    <div class="company-record-inner">
-      <div class="company-toolbar">
-        <button type="button" id="company-back" class="btn btn-ghost">← Back to leads</button>
-        <button type="button" id="company-quick-drawer" class="btn btn-ghost" title="Open slim side drawer">Quick edit</button>
-        <span id="company-api-banner" class="company-api-banner hidden"></span>
-      </div>
-      <div id="company-body" class="company-body">
-        <!-- filled by JS -->
-      </div>
-    </div>
-  </div>
-
 </div><!-- /app -->
 
-<!-- LEAD DETAIL PANEL (quick triage; multi-contact surface is company record) -->
+<!-- LEAD DETAIL PANEL (quick triage — multi-contact Send lives on company record) -->
 <div id="detail-overlay" class="detail-overlay hidden"></div>
 <div id="detail-panel" class="detail-panel hidden">
   <div class="detail-header">

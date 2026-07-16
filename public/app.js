@@ -230,6 +230,13 @@ async function init() {
       if (state.companyId) openDetail(state.companyId);
     });
   }
+  const refresh = $('company-refresh');
+  if (refresh && !refresh.dataset.bound) {
+    refresh.dataset.bound = '1';
+    refresh.addEventListener('click', () => {
+      if (state.companyId) openCompanyRecord(state.companyId);
+    });
+  }
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
