@@ -176,6 +176,8 @@ async function initSchema() {
   // ── Contacts (Account→Contact; dual-read with leads.contacts JSON) ─────────
   // Soft-link only: contacts.lead_id → leads; no hard deletes of leads.
   // Empty emails skipped for uniqueness (partial unique index).
+  // NOTE: Schema also owned by Task 09 (feature/contacts-schema). Idempotent here so
+  // company API works if 09 is not yet merged; migrate-contacts.js remains Task 09.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS contacts (
       id SERIAL PRIMARY KEY,
@@ -357,6 +359,109 @@ const requireAuth = (req, res, next) => {
   if (req.session && req.session.userId) return next();
   res.status(401).json({ error: 'Unauthorized' });
 };
+
+// ── Contact helpers (Task 10 company API) ─────────────────────────────────────
+const CONTACT_SELECT =
+  'id, lead_id, name, email, role, is_primary, source, last_emailed_at, last_email_status, created_at';
+
+async function listContactsForLead(leadId) {
+  return pgAll(
+    `SELECT ${CONTACT_SELECT} FROM contacts WHERE lead_id = ? ORDER BY is_primary DESC, id ASC`,
+    leadId
+  );
+}
+
+async function getLeadOr404(id, res) {
+  const lead = await pgGet('SELECT * FROM leads WHERE id = ?', id);
+  if (!lead) {
+    res.status(404).json({ error: 'Not found' });
+    return null;
+  }
+  return lead;
+}
+
+/**
+ * Resolve contact by id (must belong to lead) or by email; create if missing.
+ * Used by send-email-to and manual POST contacts.
+ */
+async function resolveOrCreateContact(leadId, { contact_id, email, name, role, source, is_primary }) {
+  const leadIdNum = parseInt(leadId, 10);
+  if (contact_id) {
+    const byId = await pgGet(
+      `SELECT ${CONTACT_SELECT} FROM contacts WHERE id = ? AND lead_id = ?`,
+      parseInt(contact_id, 10),
+      leadIdNum
+    );
+    if (byId) return byId;
+  }
+
+  const emailNorm = (email || '').trim();
+  if (emailNorm) {
+    const existing = await pgGet(
+      `SELECT ${CONTACT_SELECT} FROM contacts WHERE lead_id = ? AND email = ?`,
+      leadIdNum,
+      emailNorm
+    );
+    if (existing) {
+      // Optionally refresh name/role if provided and currently empty
+      if ((name && !existing.name) || (role && !existing.role)) {
+        await pgRun(
+          `UPDATE contacts SET
+             name = CASE WHEN COALESCE(name,'') = '' AND ? != '' THEN ? ELSE name END,
+             role = CASE WHEN COALESCE(role,'') = '' AND ? != '' THEN ? ELSE role END
+           WHERE id = ?`,
+          name || '', name || '', role || '', role || '', existing.id
+        );
+        return pgGet(`SELECT ${CONTACT_SELECT} FROM contacts WHERE id = ?`, existing.id);
+      }
+      return existing;
+    }
+
+    if (is_primary) {
+      await pgRun('UPDATE contacts SET is_primary = FALSE WHERE lead_id = ?', leadIdNum);
+    }
+
+    const inserted = await pool.query(
+      `INSERT INTO contacts (lead_id, name, email, role, is_primary, source)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING ${CONTACT_SELECT}`,
+      [
+        leadIdNum,
+        name || '',
+        emailNorm,
+        role || '',
+        !!is_primary,
+        source || 'manual'
+      ]
+    );
+    return inserted.rows[0];
+  }
+
+  // No email: create non-unique blank-email contact only when name provided (manual add)
+  if (name) {
+    if (is_primary) {
+      await pgRun('UPDATE contacts SET is_primary = FALSE WHERE lead_id = ?', leadIdNum);
+    }
+    const inserted = await pool.query(
+      `INSERT INTO contacts (lead_id, name, email, role, is_primary, source)
+       VALUES ($1, $2, '', $3, $4, $5)
+       RETURNING ${CONTACT_SELECT}`,
+      [leadIdNum, name, role || '', !!is_primary, source || 'manual']
+    );
+    return inserted.rows[0];
+  }
+
+  return null;
+}
+
+async function updateContactEmailStatus(contactId, status) {
+  if (!contactId) return;
+  await pgRun(
+    `UPDATE contacts SET last_emailed_at = NOW(), last_email_status = ? WHERE id = ?`,
+    status,
+    contactId
+  );
+}
 
 // ── Health (no auth; launchd / monitoring). Non-secret status only. ────────────
 app.get('/api/health', async (req, res) => {
@@ -542,262 +647,120 @@ app.get('/api/leads', requireAuth, async (req, res) => {
   res.json({ total, page: parseInt(page), limit: parseInt(limit), rows });
 });
 
-app.get('/api/leads/:id', requireAuth, async (req, res) => {
-  const lead = await pgGet('SELECT * FROM leads WHERE id = ?', req.params.id);
-  if (!lead) return res.status(404).json({ error: 'Not found' });
-  res.json(lead);
-});
+// ── Company / Contacts / Activity API (Task 10) ───────────────────────────────
+// Dynamics-style Account record surface for Task 11 company UI.
+// Prefer canonical companies (merged_into_id IS NULL) when listing; single-id GETs still work.
 
-// ── Contact helpers (Task 10 company API; schema from Task 09 / dual-owned) ───
-const CONTACT_SELECT =
-  'id, lead_id, name, email, role, is_primary, source, last_emailed_at, last_email_status, created_at';
-
-function mapContactRow(c) {
-  if (!c) return null;
-  return {
-    id: c.id,
-    lead_id: c.lead_id,
-    name: c.name || '',
-    email: c.email || '',
-    role: c.role || '',
-    is_primary: !!c.is_primary,
-    source: c.source || '',
-    last_emailed_at: c.last_emailed_at || null,
-    last_email_status: c.last_email_status || '',
-    created_at: c.created_at || null
-  };
-}
-
-async function listContactsForLead(leadId) {
-  const rows = await pgAll(
-    `SELECT ${CONTACT_SELECT} FROM contacts WHERE lead_id = ? ORDER BY is_primary DESC, id ASC`,
-    leadId
-  );
-  return rows.map(mapContactRow);
-}
-
-/**
- * Resolve contact by id, or find/create by email for a lead.
- * Used by send-email-to and manual contact create.
- */
-async function resolveOrCreateContact(leadId, { contact_id, email, name, role, source, is_primary }) {
-  const leadIdNum = parseInt(leadId, 10);
-  if (contact_id) {
-    const existing = await pgGet(
-      `SELECT ${CONTACT_SELECT} FROM contacts WHERE id = ? AND lead_id = ?`,
-      parseInt(contact_id, 10),
-      leadIdNum
-    );
-    if (existing) return mapContactRow(existing);
-  }
-
-  const emailNorm = (email || '').trim();
-  if (emailNorm) {
-    const byEmail = await pgGet(
-      `SELECT ${CONTACT_SELECT} FROM contacts WHERE lead_id = ? AND lower(email) = lower(?)`,
-      leadIdNum,
-      emailNorm
-    );
-    if (byEmail) {
-      // Optionally refresh name/role if provided and currently empty
-      if ((name && !byEmail.name) || (role && !byEmail.role)) {
-        await pgRun(
-          `UPDATE contacts SET
-             name = CASE WHEN COALESCE(name,'') = '' AND ? <> '' THEN ? ELSE name END,
-             role = CASE WHEN COALESCE(role,'') = '' AND ? <> '' THEN ? ELSE role END
-           WHERE id = ?`,
-          name || '', name || '', role || '', role || '', byEmail.id
-        );
-        const refreshed = await pgGet(`SELECT ${CONTACT_SELECT} FROM contacts WHERE id = ?`, byEmail.id);
-        return mapContactRow(refreshed);
-      }
-      return mapContactRow(byEmail);
-    }
-
-    const inserted = await pool.query(
-      `INSERT INTO contacts (lead_id, name, email, role, is_primary, source)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING ${CONTACT_SELECT}`,
-      [
-        leadIdNum,
-        (name || '').trim(),
-        emailNorm,
-        (role || '').trim(),
-        !!is_primary,
-        source || 'manual'
-      ]
-    );
-    return mapContactRow(inserted.rows[0]);
-  }
-
-  return null;
-}
-
-async function updateContactEmailStatus(contactId, status) {
-  if (!contactId) return;
-  await pgRun(
-    `UPDATE contacts SET last_emailed_at = NOW(), last_email_status = ? WHERE id = ?`,
-    status || '',
-    contactId
-  );
-}
-
-// ── Company / Contacts / Activity API (Task 10 contract for Task 11 UI) ───────
-
-// GET company payload: lead + contacts[] + summary counts
 app.get('/api/leads/:id/company', requireAuth, async (req, res) => {
   try {
-    const leadId = parseInt(req.params.id, 10);
-    if (!leadId) return res.status(400).json({ error: 'Bad lead id' });
+    const lead = await getLeadOr404(req.params.id, res);
+    if (!lead) return;
 
-    const lead = await pgGet('SELECT * FROM leads WHERE id = ?', leadId);
-    if (!lead) return res.status(404).json({ error: 'Not found' });
-
-    const contacts = await listContactsForLead(leadId);
-    const emailCountRow = await pgGet(
-      'SELECT COUNT(*)::int AS n FROM email_logs WHERE lead_id = ?',
-      leadId
+    const contacts = await listContactsForLead(lead.id);
+    const emailCount = parseInt(
+      (await pgGet('SELECT COUNT(*)::int AS n FROM email_logs WHERE lead_id = ?', lead.id))?.n || 0,
+      10
     );
-    const callCountRow = await pgGet(
-      'SELECT COUNT(*)::int AS n FROM call_logs WHERE lead_id = ?',
-      leadId
+    const callCount = parseInt(
+      (await pgGet('SELECT COUNT(*)::int AS n FROM call_logs WHERE lead_id = ?', lead.id))?.n || 0,
+      10
     );
-    const lastEmail = await pgGet(
-      'SELECT sent_at FROM email_logs WHERE lead_id = ? ORDER BY sent_at DESC NULLS LAST LIMIT 1',
-      leadId
-    );
-    const lastCall = await pgGet(
-      'SELECT created_at FROM call_logs WHERE lead_id = ? ORDER BY created_at DESC NULLS LAST LIMIT 1',
-      leadId
-    );
-
-    let last_activity_at = null;
-    const emailAt = lastEmail && lastEmail.sent_at ? new Date(lastEmail.sent_at) : null;
-    const callAt = lastCall && lastCall.created_at ? new Date(lastCall.created_at) : null;
-    if (emailAt && callAt) last_activity_at = emailAt > callAt ? emailAt : callAt;
-    else last_activity_at = emailAt || callAt;
 
     res.json({
       ...lead,
       contacts,
       summary: {
         contact_count: contacts.length,
-        email_count: emailCountRow ? emailCountRow.n : 0,
-        call_count: callCountRow ? callCountRow.n : 0,
-        last_activity_at: last_activity_at ? last_activity_at.toISOString() : null,
+        email_log_count: emailCount,
+        call_log_count: callCount,
         is_merged: lead.merged_into_id != null,
         merged_into_id: lead.merged_into_id || null
       }
     });
   } catch (err) {
-    console.error('GET /api/leads/:id/company', err.message);
-    res.status(500).json({ error: 'Failed to load company' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// GET contacts list for a lead
 app.get('/api/leads/:id/contacts', requireAuth, async (req, res) => {
   try {
-    const leadId = parseInt(req.params.id, 10);
-    if (!leadId) return res.status(400).json({ error: 'Bad lead id' });
-
-    const lead = await pgGet('SELECT id FROM leads WHERE id = ?', leadId);
-    if (!lead) return res.status(404).json({ error: 'Lead not found' });
-
-    const rows = await listContactsForLead(leadId);
+    const lead = await getLeadOr404(req.params.id, res);
+    if (!lead) return;
+    const rows = await listContactsForLead(lead.id);
     res.json({ rows });
   } catch (err) {
-    console.error('GET /api/leads/:id/contacts', err.message);
-    res.status(500).json({ error: 'Failed to list contacts' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// POST manual contact
 app.post('/api/leads/:id/contacts', requireAuth, async (req, res) => {
   try {
-    const leadId = parseInt(req.params.id, 10);
-    if (!leadId) return res.status(400).json({ error: 'Bad lead id' });
+    const lead = await getLeadOr404(req.params.id, res);
+    if (!lead) return;
 
-    const lead = await pgGet('SELECT id FROM leads WHERE id = ?', leadId);
-    if (!lead) return res.status(404).json({ error: 'Lead not found' });
-
-    const body = req.body || {};
-    const name = (body.name || '').trim();
-    const email = (body.email || '').trim();
-    const role = (body.role || '').trim();
-    const is_primary = !!body.is_primary;
-
-    if (!name && !email) {
+    const { name = '', email = '', role = '', is_primary } = req.body || {};
+    if (!String(name).trim() && !String(email).trim()) {
       return res.status(400).json({ error: 'name or email required' });
     }
 
-    // If email present and already exists for this lead, return existing (idempotent)
-    if (email) {
-      const existing = await pgGet(
-        `SELECT ${CONTACT_SELECT} FROM contacts WHERE lead_id = ? AND lower(email) = lower(?)`,
-        leadId,
-        email
-      );
-      if (existing) {
-        return res.status(200).json({ ok: true, contact: mapContactRow(existing), existing: true });
-      }
+    const contact = await resolveOrCreateContact(lead.id, {
+      name: String(name || '').trim(),
+      email: String(email || '').trim(),
+      role: String(role || '').trim(),
+      is_primary: !!is_primary,
+      source: 'manual'
+    });
+
+    if (!contact) {
+      return res.status(400).json({ error: 'Could not create contact' });
     }
 
-    // If marking primary, clear other primaries for this lead
-    if (is_primary) {
-      await pgRun('UPDATE contacts SET is_primary = FALSE WHERE lead_id = ?', leadId);
+    // If client asked for primary on an existing row, enforce it
+    if (is_primary && !contact.is_primary) {
+      await pgRun('UPDATE contacts SET is_primary = FALSE WHERE lead_id = ?', lead.id);
+      await pgRun('UPDATE contacts SET is_primary = TRUE WHERE id = ?', contact.id);
+      contact.is_primary = true;
     }
 
-    const inserted = await pool.query(
-      `INSERT INTO contacts (lead_id, name, email, role, is_primary, source)
-       VALUES ($1, $2, $3, $4, $5, 'manual')
-       RETURNING ${CONTACT_SELECT}`,
-      [leadId, name, email, role, is_primary]
-    );
-    res.status(201).json({ ok: true, contact: mapContactRow(inserted.rows[0]) });
+    res.status(201).json({ ok: true, contact });
   } catch (err) {
+    // Unique violation on (lead_id, email)
     if (err && err.code === '23505') {
       return res.status(409).json({ error: 'Contact with this email already exists for lead' });
     }
-    console.error('POST /api/leads/:id/contacts', err.message);
-    res.status(500).json({ error: 'Failed to create contact' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// GET unified activity timeline (emails + calls), newest first
 app.get('/api/leads/:id/activity', requireAuth, async (req, res) => {
   try {
-    const leadId = parseInt(req.params.id, 10);
-    if (!leadId) return res.status(400).json({ error: 'Bad lead id' });
-
-    const lead = await pgGet('SELECT id FROM leads WHERE id = ?', leadId);
-    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    const lead = await getLeadOr404(req.params.id, res);
+    if (!lead) return;
 
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
 
     const emails = await pgAll(
       `SELECT id, contact_id, recipient, subject, status, error, sent_at
        FROM email_logs WHERE lead_id = ? ORDER BY sent_at DESC NULLS LAST LIMIT ?`,
-      leadId,
+      lead.id,
       limit
     );
 
     let calls = [];
     try {
       calls = await pgAll(
-        `SELECT id, outcome, duration_seconds, transcript, created_at
+        `SELECT id, outcome, duration_seconds, transcript, summary, direction, source, created_at
          FROM call_logs WHERE lead_id = ? ORDER BY created_at DESC NULLS LAST LIMIT ?`,
-        leadId,
+        lead.id,
         limit
       );
-    } catch (e) {
-      // call_logs may be absent on very old DBs — emails still returned
+    } catch {
+      // call_logs may be absent on very old DBs; activity still returns emails
       calls = [];
     }
 
-    const rows = [];
-    for (const e of emails) {
-      rows.push({
+    const rows = [
+      ...emails.map((e) => ({
         type: 'email',
         id: e.id,
         contact_id: e.contact_id || null,
@@ -805,30 +768,42 @@ app.get('/api/leads/:id/activity', requireAuth, async (req, res) => {
         subject: e.subject || '',
         status: e.status || '',
         error: e.error || null,
-        at: e.sent_at || null
-      });
-    }
-    for (const c of calls) {
-      rows.push({
+        at: e.sent_at
+      })),
+      ...calls.map((c) => ({
         type: 'call',
         id: c.id,
         outcome: c.outcome || '',
         duration_seconds: c.duration_seconds || 0,
         transcript: c.transcript || '',
-        at: c.created_at || null
-      });
-    }
+        summary: c.summary || '',
+        direction: c.direction || '',
+        source: c.source || '',
+        at: c.created_at
+      }))
+    ]
+      .sort((a, b) => {
+        const ta = a.at ? new Date(a.at).getTime() : 0;
+        const tb = b.at ? new Date(b.at).getTime() : 0;
+        return tb - ta;
+      })
+      .slice(0, limit);
 
-    rows.sort((a, b) => {
-      const ta = a.at ? new Date(a.at).getTime() : 0;
-      const tb = b.at ? new Date(b.at).getTime() : 0;
-      return tb - ta;
-    });
-
-    res.json({ rows: rows.slice(0, limit) });
+    res.json({ rows });
   } catch (err) {
-    console.error('GET /api/leads/:id/activity', err.message);
-    res.status(500).json({ error: 'Failed to load activity' });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/leads/:id', requireAuth, async (req, res) => {
+  const lead = await pgGet('SELECT * FROM leads WHERE id = ?', req.params.id);
+  if (!lead) return res.status(404).json({ error: 'Not found' });
+  // Lightweight enhance: include contacts[] when table present (Task 11 can use /company)
+  try {
+    const contacts = await listContactsForLead(lead.id);
+    res.json({ ...lead, contacts });
+  } catch {
+    res.json(lead);
   }
 });
 
@@ -922,8 +897,8 @@ app.post('/api/enrich', requireAuth, async (req, res) => {
 });
 
 // ── Send to specific contact (Hunter multi-contact + contacts table) ──────────
-// Body: { email, name?, contact_id? }
-// Resolves/creates contact, logs email_logs.contact_id, updates contact last_* fields.
+// Body: { email, name, contact_id? }
+// Resolves/creates contact, sends via SMTP_FROM, logs email_logs.contact_id, updates contact status.
 app.post('/api/send-email-to/:id', requireAuth, async (req, res) => {
   const { email, name, contact_id } = req.body || {};
   if (!email) return res.status(400).json({ error: 'No email provided' });
@@ -942,35 +917,49 @@ app.post('/api/send-email-to/:id', requireAuth, async (req, res) => {
     contact = await resolveOrCreateContact(lead.id, {
       contact_id,
       email,
-      name,
-      source: contact_id ? undefined : 'manual'
+      name: name || '',
+      source: contact_id ? 'manual' : 'manual',
+      role: ''
     });
   } catch (e) {
-    console.error('resolveOrCreateContact', e.message);
+    // Non-fatal: still send email even if contact table write fails
+    contact = null;
   }
 
   const mergedLead = { ...lead, owner_name: name || (contact && contact.name) || lead.owner_name };
   const subject = applyMergeFields(template.subject, mergedLead);
   const body = applyMergeFields(template.body, mergedLead);
-  const contactIdVal = contact ? contact.id : null;
+  const contactIdVal = contact && contact.id ? contact.id : null;
 
   try {
     await transporter.sendMail({ from, to: email, subject, text: body });
-    await pgRun(
-      `INSERT INTO email_logs (lead_id, recipient, subject, status, contact_id) VALUES (?,?,?,?,?)`,
-      lead.id, email, subject, 'sent', contactIdVal
-    );
-    await updateContactEmailStatus(contactIdVal, 'sent');
-    const now = new Date().toISOString().slice(0, 10);
-    await pgRun(`UPDATE leads SET email_sent=1, date_sent=?, last_contacted=? WHERE id=?`, now, now, lead.id);
+    if (contactIdVal) {
+      await pgRun(
+        `INSERT INTO email_logs (lead_id, recipient, subject, status, contact_id) VALUES (?,?,?,?,?)`,
+        lead.id, email, subject, 'sent', contactIdVal
+      );
+      await updateContactEmailStatus(contactIdVal, 'sent');
+    } else {
+      await pgRun(
+        `INSERT INTO email_logs (lead_id, recipient, subject, status) VALUES (?,?,?,?)`,
+        lead.id, email, subject, 'sent'
+      );
+    }
     res.json({ ok: true, contact_id: contactIdVal });
   } catch (err) {
-    await pgRun(
-      `INSERT INTO email_logs (lead_id, recipient, subject, status, error, contact_id) VALUES (?,?,?,?,?,?)`,
-      lead.id, email, subject, 'error', err.message, contactIdVal
-    );
-    await updateContactEmailStatus(contactIdVal, 'error');
-    res.status(500).json({ error: err.message, contact_id: contactIdVal });
+    if (contactIdVal) {
+      await pgRun(
+        `INSERT INTO email_logs (lead_id, recipient, subject, status, error, contact_id) VALUES (?,?,?,?,?,?)`,
+        lead.id, email, subject, 'error', err.message, contactIdVal
+      );
+      await updateContactEmailStatus(contactIdVal, 'error');
+    } else {
+      await pgRun(
+        `INSERT INTO email_logs (lead_id, recipient, subject, status, error) VALUES (?,?,?,?,?)`,
+        lead.id, email, subject, 'error', err.message
+      );
+    }
+    res.status(500).json({ error: err.message });
   }
 });
 
